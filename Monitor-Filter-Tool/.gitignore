@@ -1,0 +1,17 @@
+# 環境與快取
+.venv/
+__pycache__/
+.antigravity/
+python-embed/
+
+# AI 權重與模型檔案
+*.pt
+*.pb
+yolov8n.pt
+ESPCN_x2.pb
+
+# 實體測試影片與證物資料夾 (切斷數據外洩)
+input_videos/
+captures/
+repaired_videos/
+enhanced_evidence/

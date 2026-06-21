@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>AG-MONITOR 科技偵查戰術播放器</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script type="text/javascript" src="/eel.js"></script>
+    <style>
+        /* CSS reset and base */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { 
+            height: 100vh; 
+            width: 100vw;
+            overflow: hidden; 
+            background-color: #121212; 
+            color: #E0E0E0; 
+            font-family: "Microsoft JhengHei", sans-serif;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Variables */
+        :root {
+            --bg-dark: #1E1E1E;
+            --bg-panel: #252526;
+            --border-color: #333333;
+            --accent-green: #00FF66;
+            --accent-blue: #007ACC;
+            --text-main: #E0E0E0;
+            --text-muted: #A0A0A0;
+        }
+
+        /* Layout */
+        .panel-left {
+            width: 350px;
+            height: 100%;
+            background-color: var(--bg-panel);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .panel-right {
+            flex-grow: 1;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--bg-dark);
+            position: relative;
+        }
+
+        /* Left Panel Sections */
+        .logo-container {
+            padding: 10px;
+            border-bottom: 1px solid var(--border-color);
+            text-align: center;
+        }
+        
+        .section {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .section-title {
+            color: var(--accent-green);
+            font-weight: bold;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        
+        .queue-section {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .queue-box {
+            flex-grow: 1;
+            overflow-y: auto;
+            background: #1A1A1A;
+            border: 1px solid var(--border-color);
+            margin-top: 10px;
+            padding: 5px;
+        }
+        .queue-item {
+            padding: 5px;
+            border-bottom: 1px solid #333;
+            font-size: 13px;
+        }
+
+        /* Form elements */
+        .btn-group { display: flex; gap: 5px; }
+        .btn {
+            background-color: #333;
+            color: white;
+            border: 1px solid #444;
+            padding: 6px 12px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 13px;
+            flex-grow: 1;
+            text-align: center;
+            transition: 0.2s;
+        }
+        .btn:hover { background-color: #444; }
+        .btn-start { background-color: #007ACC; border-color: #005A9E; }
+        .btn-start:hover { background-color: #005A9E; }
+        .btn-stop { background-color: #D9383A; border-color: #A32A2B; }
+        .btn-stop:hover { background-color: #A32A2B; }
+        .btn-active { background-color: var(--accent-green); color: black; font-weight: bold; }
+
+        input[type=range] { width: 100%; margin-top: 5px; }
+        .slider-header { display: flex; justify-content: space-between; font-size: 12px; }
+        .highlight-val { color: var(--accent-green); }
+        
+        .cyber-select {
+            width: 100%;
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            padding: 5px;
+        }
+
+        /* Right Panel */
+        /* Top Mode Switcher */
+        .mode-switcher-bar {
+            height: 50px;
+            background: #1A1A1A;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+        }
+        .mode-btn {
+            padding: 8px 20px;
+            background: #252526;
+            border: 1px solid #444;
+            color: var(--text-muted);
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+        .mode-btn.active {
+            background: rgba(0, 255, 102, 0.1);
+            color: var(--accent-green);
+            border-color: var(--accent-green);
+            box-shadow: 0 0 10px rgba(0,255,102,0.3);
+        }
+
+        /* Canvas Area */
+        .canvas-wrapper {
+            flex-grow: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            position: relative;
+            overflow: hidden;
+        }
+        #previewCanvas {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .placeholder-text {
+            position: absolute;
+            color: #555;
+            text-align: center;
+            line-height: 1.5;
+        }
+
+        /* Player Controls (PotPlayer Style) */
+        .player-controls {
+            background: #1E1E1E;
+            border-top: 1px solid var(--border-color);
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        /* Seek Bar */
+        .timeline-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .time-display { font-family: monospace; font-size: 13px; color: var(--accent-green); width: 140px; text-align: center;}
+        #timeline { flex-grow: 1; cursor: pointer; }
+
+        /* Buttons Row */
+        .control-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .control-group {
+            display: flex;
+            gap: 5px;
+        }
+        .icon-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            color: #CCC;
+            font-size: 16px;
+            width: 36px;
+            height: 36px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: 0.2s;
+        }
+        .icon-btn:hover { background: #333; color: white; }
+        .speed-btn {
+            background: #333;
+            border: 1px solid #444;
+            color: #CCC;
+            padding: 4px 8px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .speed-btn.active {
+            background: var(--accent-blue);
+            color: white;
+            border-color: var(--accent-blue);
+        }
+
+        /* Bottom Log Area */
+        .log-wrapper {
+            height: 200px;
+            background: #1A1A1A;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+        }
+        .status-bar {
+            padding: 5px 10px;
+            background: #252526;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+        }
+        .status-ok { color: var(--accent-green); }
+        .status-warn { color: #FFCC00; }
+        .status-danger { color: #FF4444; }
+        
+        .log-box {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .log-entry.info { color: #CCC; }
+        .log-entry.success { color: var(--accent-green); }
+        .log-entry.warn { color: #FFCC00; }
+        .log-entry.error { color: #FF4444; }
+
+        .hidden { display: none !important; }
+
+        /* Global Tab Bar */
+        .global-tab-bar {
+            height: 40px;
+            background: #000;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            flex-shrink: 0;
+        }
+        .global-tab-btn {
+            background: transparent;
+            color: var(--text-muted);
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            outline: none;
+            transition: 0.3s;
+            border-bottom: 2px solid transparent;
+        }
+        .global-tab-btn:hover { color: white; }
+        .global-tab-btn.active {
+            color: var(--accent-green);
+            border-bottom: 2px solid var(--accent-green);
+            text-shadow: 0 0 5px rgba(0,255,102,0.5);
+        }
+
+        .main-view {
+            display: none;
+            flex-grow: 1;
+            height: calc(100vh - 40px);
+            overflow: hidden;
+        }
+        .main-view.active {
+            display: flex;
+        }
+
+        /* SR Workspace */
+        #viewSR { flex-direction: column; background: var(--bg-dark); }
+        .sr-controls {
+            padding: 15px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            align-items: center;
+        }
+        .sr-controls .btn { max-width: 200px; padding: 10px 20px; font-size: 15px; }
+        .sr-workspace {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: row;
+            overflow: hidden;
+        }
+        .sr-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 15px;
+        }
+        .sr-divider {
+            width: 1px;
+            background: var(--accent-green);
+            box-shadow: 0 0 5px rgba(0,255,102,0.5);
+        }
+        .sr-panel-title {
+            color: var(--accent-green);
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-align: center;
+            font-size: 16px;
+        }
+        .sr-canvas-wrap {
+            flex-grow: 1;
+            border: 1px dashed #444;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+    <div class="global-tab-bar">
+        <button id="mainTabPlayer" class="global-tab-btn active" onclick="switchMainTab('player')">👁️ 智慧戰術播放器</button>
+        <button id="mainTabSR" class="global-tab-btn" onclick="switchMainTab('sr')">📸 數位鑑識照片修復</button>
+    </div>
+
+    <div id="viewPlayer" class="main-view active">
+        <div class="panel-left">
+        <div class="logo-container">
+            <svg width="200" height="48" viewBox="0 0 250 60">
+                <polygon points="25,5 55,5 55,30 40,50 25,30" fill="#2A2A2A" stroke="#555555" stroke-width="2"/>
+                <path d="M 15 45 A 25 25 0 0 1 65 -5" fill="none" stroke="#00FF66" stroke-width="1" stroke-dasharray="2,2"/>
+                <path d="M 25 35 A 15 15 0 0 1 55 5" fill="none" stroke="#007ACC" stroke-width="1.5"/>
+                <circle cx="40" cy="20" r="2" fill="#00FF66"/>
+                <text x="75" y="25" fill="#FFFFFF" font-family="Arial" font-size="16" font-weight="bold" font-style="italic">AG-MONITOR</text>
+                <text x="76" y="45" fill="#00FF66" font-family="'Microsoft JhengHei'" font-size="9" font-weight="bold">科技偵查 · 戰術播放器</text>
+            </svg>
+        </div>
+
+        <div class="section queue-section">
+            <div class="section-title">【1. 待處理證物清單】</div>
+            <div class="btn-group">
+                <button class="btn btn-default" onclick="addVideos()">📁 匯入影片</button>
+                <button class="btn btn-default" onclick="clearQueue()">🗑️ 清除清單</button>
+            </div>
+            <div class="queue-box" id="queueList"></div>
+        </div>
+
+        <div class="section auto-ai-controls">
+            <div class="section-title">【2. 智慧辨識設定】</div>
+            <div class="slider-group">
+                <div class="slider-header">
+                    <span>AI 靈敏度門檻:</span>
+                    <span id="confVal" class="highlight-val">0.40</span>
+                </div>
+                <input type="range" id="confSlider" min="0.10" max="0.90" step="0.01" value="0.40">
+            </div>
+            <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; font-size:13px;">
+                <label><input type="checkbox" id="cls_person" checked> Person</label>
+                <label><input type="checkbox" id="cls_bicycle" checked> Bicycle</label>
+                <label><input type="checkbox" id="cls_car" checked> Car</label>
+                <label><input type="checkbox" id="cls_motorcycle" checked> Moto</label>
+            </div>
+        </div>
+
+        <div class="section auto-ai-controls">
+            <div class="section-title">【3. 無人空景極速調速】</div>
+            <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:14px; cursor:pointer;">
+                <input type="checkbox" id="fastMode" checked> 啟用極速背景處理 (關閉實時畫面)
+            </label>
+            <div class="slider-group">
+                <div class="slider-header">
+                    <span>空景安全閃現跳躍間隔 (秒):</span>
+                    <span id="skipSecVal" class="highlight-val">0.20s [標準]</span>
+                </div>
+                <input type="range" id="skipSecSlider" min="0.05" max="1.0" step="0.05" value="0.20">
+            </div>
+        </div>
+
+        <div class="section auto-ai-controls">
+            <div class="section-title">【4. 蒐證模式設定】</div>
+            <select id="captureMode" class="cyber-select">
+                <option value="雙格蒐證模式 (起點+最清晰)" selected>精華雙格蒐證 (起點格 + 最清晰特徵格)</option>
+                <option value="持續追蹤模式 (預設)">動態定時連拍 (依設定秒數連續拍照)</option>
+                <option value="事件起訖模式">進出瞬間捕捉 (僅抓進入與離開首尾兩張)</option>
+            </select>
+        </div>
+
+        <div class="section" style="margin-bottom: 0;">
+            <div class="section-title">【5. 戰術啟動區】</div>
+            <button class="btn btn-default" style="width: 100%; margin-bottom: 8px;" onclick="clearRoi()">⬡ 清除 ROI 防線</button>
+            <button class="btn btn-folder" style="width: 100%; margin-bottom: 8px;" onclick="openFolder()">📂 開啟截圖資料夾</button>
+            <button id="btnStartAuto" class="btn btn-start" style="width: 100%; padding:10px;" onclick="toggleAutoProcessing()">▶️ 啟動全自動 AI 過濾</button>
+        </div>
+    </div>
+
+    <div class="panel-right">
+        <!-- 頂部雙模態切換 -->
+        <div class="mode-switcher-bar">
+            <button id="modeAutoBtn" class="mode-btn active" onclick="switchMode('auto')">🎯 全自動 AI 蒐證</button>
+            <button id="modeManualBtn" class="mode-btn" onclick="switchMode('manual')">👁️ 即時人眼點視</button>
+        </div>
+
+        <!-- 畫布區 -->
+        <div class="canvas-wrapper">
+            <div id="placeholderText" class="placeholder-text">
+                【AG-Forensic-Player 萬用 AI 科技偵查戰術播放器】<br><br>
+                1. 支援 .mp4, .265, .h265, .264, .dav 等原生裸流 0 秒秒開<br>
+                2. 導入後可於此劃定多邊形 ROI 防線<br>
+                3. 切換上方【即時人眼點視】可作為專業證據播放器使用
+            </div>
+            <canvas id="previewCanvas"></canvas>
+        </div>
+
+        <!-- 播放器控制列 (僅在人眼點視模式顯示) -->
+        <div id="playerControls" class="player-controls hidden">
+            <div class="timeline-container">
+                <div class="time-display" id="timeDisplay">00:00:00 / 00:00:00</div>
+                <input type="range" id="timeline" min="0" max="100" value="0" step="0.1">
+            </div>
+            <div class="control-row">
+                <div class="control-group">
+                    <button class="icon-btn" onclick="eel.play_pause()()" title="播放/暫停 (Space)"><i class="fas fa-play" id="playIcon"></i></button>
+                    <button class="icon-btn" onclick="eel.step_frame(-1)()" title="倒退一格 (Left Arrow)"><i class="fas fa-step-backward"></i></button>
+                    <button class="icon-btn" onclick="eel.step_frame(1)()" title="前進一格 (Right Arrow)"><i class="fas fa-step-forward"></i></button>
+                    <button class="icon-btn" onclick="eel.toggle_reverse()()" title="倒放開關"><i class="fas fa-backward" id="reverseIcon"></i></button>
+                </div>
+                <div class="control-group">
+                    <button class="speed-btn active" onclick="setSpeed(1, this)">1x</button>
+                    <button class="speed-btn" onclick="setSpeed(2, this)">2x</button>
+                    <button class="speed-btn" onclick="setSpeed(4, this)">4x</button>
+                    <button class="speed-btn" onclick="setSpeed(8, this)">8x</button>
+                    <button class="speed-btn" onclick="setSpeed(16, this)">16x</button>
+                </div>
+                <div class="control-group">
+                    <button class="btn btn-stop" style="font-weight:bold;" onclick="eel.manual_capture()()" title="快捷鍵: C">📸 手動快門 (C)</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部日誌區 -->
+        <div class="log-wrapper">
+            <div class="status-bar">
+                <span id="statusText" class="status-ok">狀態: 系統準備就緒</span>
+                <span id="progressText">0%</span>
+            </div>
+            <div class="log-box" id="logBox">
+                <div class="log-entry info">系統已初始化，等待任務...</div>
+            </div>
+        </div>
+        </div>
+    </div>
+
+    <!-- AI SR View -->
+    <div id="viewSR" class="main-view">
+        <div class="sr-controls">
+            <input type="file" id="srFileInput" accept="image/*" class="hidden">
+            <button class="btn btn-default" onclick="document.getElementById('srFileInput').click()">📁 選擇圖片</button>
+            <div class="sr-mode-select" style="display:flex; align-items:center; gap:10px; color:#ccc; font-size:14px; margin:0 10px;">
+                <label style="cursor:pointer;"><input type="radio" name="srMode" value="plate" checked> 🚗 文字車牌 (強化邊緣)</label>
+                <label style="cursor:pointer;"><input type="radio" name="srMode" value="face"> 👤 人像五官 (降噪平滑)</label>
+            </div>
+            <button id="btnStartSR" class="btn btn-start" onclick="startSR()">⚡ 開始 AI 高清化</button>
+            <button id="btnAbortSR" class="btn btn-stop" style="display:none; background-color:#FF4444;" onclick="abortSR()">❌ 中止修復</button>
+            <button id="btnSaveSR" class="btn btn-stop" onclick="saveSR()">💾 保存高清證物</button>
+        </div>
+        <div class="sr-workspace">
+            <div class="sr-panel sr-panel-left">
+                <div class="sr-panel-title">【🔍 原始證物格】</div>
+                <div class="sr-canvas-wrap">
+                    <span id="srLeftPlaceholder" class="placeholder-text">點擊上方按鈕選擇或拖曳證物圖片至此</span>
+                    <img id="srOriginalImg" src="" style="display:none; max-width:100%; max-height:100%; object-fit:contain;">
+                </div>
+            </div>
+            <div class="sr-divider"></div>
+            <div class="sr-panel sr-panel-right">
+                <div class="sr-panel-title">【🎯 AI 重建格】</div>
+                <div class="sr-canvas-wrap">
+                    <span id="srRightPlaceholder" class="placeholder-text">等待 AI 重建...</span>
+                    <img id="srEnhancedImg" src="" style="display:none; max-width:100%; max-height:100%; object-fit:contain;">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentMode = 'auto'; // 'auto' or 'manual'
+        let isProcessing = false;
+        let isPlaying = false;
+        let isReverse = false;
+        let roiPoints = [];
+        let scaleInfo = null;
+        let currentImage = null;
+
+        // UI Initialization
+        const confSlider = document.getElementById("confSlider");
+        const confVal = document.getElementById("confVal");
+        confSlider.oninput = function() { 
+            confVal.textContent = parseFloat(this.value).toFixed(2); 
+            if(isProcessing) eel.update_live_setting('confThresh', parseFloat(this.value))();
+        };
+
+        const skipSecSlider = document.getElementById("skipSecSlider");
+        const skipSecVal = document.getElementById("skipSecVal");
+        skipSecSlider.oninput = function() {
+            skipSecVal.textContent = parseFloat(this.value).toFixed(2) + "s [標準]"; 
+            if(isProcessing) eel.update_live_setting('skipSec', parseFloat(this.value))();
+        };
+
+        const fastModeCb = document.getElementById("fastMode");
+        fastModeCb.onchange = function() {
+            if(isProcessing) eel.update_live_setting('fastMode', this.checked)();
+        };
+
+        const timeline = document.getElementById("timeline");
+        timeline.oninput = function() {
+            if(currentMode === 'manual') eel.seek_frame(parseFloat(this.value))();
+        };
+
+        function switchMode(mode) {
+            if(isProcessing) {
+                appendLog("請先停止目前任務再切換模式！", "warn");
+                return;
+            }
+            currentMode = mode;
+            document.getElementById('modeAutoBtn').className = mode === 'auto' ? 'mode-btn active' : 'mode-btn';
+            document.getElementById('modeManualBtn').className = mode === 'manual' ? 'mode-btn active' : 'mode-btn';
+            
+            const autoControls = document.querySelectorAll('.auto-ai-controls');
+            autoControls.forEach(el => el.style.display = mode === 'auto' ? 'block' : 'none');
+            
+            document.getElementById('playerControls').className = mode === 'manual' ? 'player-controls' : 'player-controls hidden';
+            
+            let btn = document.getElementById('btnStartAuto');
+            if(mode === 'auto') {
+                btn.innerHTML = "▶️ 啟動全自動 AI 過濾";
+            } else {
+                btn.innerHTML = "▶️ 載入戰術播放引擎";
+            }
+            
+            eel.set_engine_mode(mode)();
+        }
+
+        function setSpeed(speed, btnElement) {
+            document.querySelectorAll('.speed-btn').forEach(btn => btn.classList.remove('active'));
+            btnElement.classList.add('active');
+            eel.set_speed(speed)();
+        }
+
+        // Eel Calls
+        async function addVideos() {
+            if(isProcessing) return;
+            let paths = await eel.add_videos_dialog()();
+            if(paths && paths.length > 0) {
+                document.getElementById("placeholderText").style.display = "none";
+                let queueBox = document.getElementById("queueList");
+                for(let p of paths) {
+                    let item = document.createElement("div");
+                    item.className = "queue-item";
+                    item.textContent = p.split(/[\\/]/).pop();
+                    queueBox.appendChild(item);
+                }
+            }
+        }
+
+        function clearQueue() {
+            if(isProcessing) return;
+            eel.clear_queue()();
+            document.getElementById("queueList").innerHTML = "";
+            clearRoi();
+            document.getElementById("placeholderText").style.display = "block";
+            let canvas = document.getElementById("previewCanvas");
+            canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+            currentImage = null;
+        }
+
+        function clearRoi() {
+            roiPoints = [];
+            eel.set_roi_points(roiPoints)();
+            drawCanvas();
+        }
+
+        function openFolder() {
+            eel.open_capture_folder()();
+        }
+
+        async function toggleAutoProcessing() {
+            let btn = document.getElementById("btnStartAuto");
+            if(isProcessing) {
+                btn.innerHTML = currentMode === 'auto' ? "▶️ 啟動全自動 AI 過濾" : "▶️ 載入戰術播放引擎";
+                btn.className = "btn btn-start";
+                eel.request_stop()();
+                return;
+            }
+            
+            let settings = {
+                confThresh: parseFloat(confSlider.value),
+                captureMode: document.getElementById("captureMode").value,
+                classes: {
+                    "0": document.getElementById("cls_person").checked,
+                    "1": document.getElementById("cls_bicycle").checked,
+                    "2": document.getElementById("cls_car").checked,
+                    "3": document.getElementById("cls_motorcycle").checked
+                },
+                fastMode: fastModeCb.checked,
+                skipSec: parseFloat(skipSecSlider.value)
+            };
+            
+            btn.innerHTML = currentMode === 'auto' ? "⏹️ 停止全自動分析" : "⏹️ 關閉播放引擎";
+            btn.className = "btn btn-stop";
+            isProcessing = true;
+            
+            document.getElementById("logBox").innerHTML = "";
+            appendLog(currentMode === 'auto' ? ">>> 系統啟動，全記憶體零延遲解碼引擎發動..." : ">>> 戰術播放引擎已載入，請使用下方控制列操作", "info");
+            
+            await eel.start_processing(settings)();
+        }
+
+        // Eel Exposed Functions
+        eel.expose(updateStatus);
+        function updateStatus(text, level) {
+            let el = document.getElementById("statusText");
+            el.textContent = text;
+            if(level === 'ok') el.className = "status-ok";
+            else if(level === 'warn') el.className = "status-warn";
+            else el.className = "status-danger";
+        }
+
+        eel.expose(updateProgress);
+        function updateProgress(percent, timecode) {
+            document.getElementById("progressText").textContent = parseFloat(percent).toFixed(1) + "%";
+            document.getElementById("timeline").value = percent;
+            if(timecode) {
+                document.getElementById("timeDisplay").textContent = timecode;
+            }
+        }
+
+        eel.expose(updatePlayState);
+        function updatePlayState(playing, reverse) {
+            isPlaying = playing;
+            isReverse = reverse;
+            document.getElementById("playIcon").className = playing ? "fas fa-pause" : "fas fa-play";
+            document.getElementById("reverseIcon").style.color = reverse ? "var(--accent-green)" : "#CCC";
+        }
+
+        eel.expose(appendLog);
+        function appendLog(msg, type='info') {
+            let box = document.getElementById("logBox");
+            let entry = document.createElement("div");
+            entry.className = "log-entry " + type;
+            entry.textContent = msg;
+            box.appendChild(entry);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        eel.expose(processingFinished);
+        function processingFinished() {
+            isProcessing = false;
+            let btn = document.getElementById("btnStartAuto");
+            btn.innerHTML = currentMode === 'auto' ? "▶️ 啟動全自動 AI 過濾" : "▶️ 載入戰術播放引擎";
+            btn.className = "btn btn-start";
+            document.getElementById("progressText").textContent = "0%";
+            document.getElementById("timeline").value = 0;
+            appendLog(">>> 任務結束或已手動中止", "info");
+        }
+
+        eel.expose(setPreviewImage);
+        function setPreviewImage(base64Data, scaleInfoObj) {
+            scaleInfo = scaleInfoObj;
+            document.getElementById("placeholderText").style.display = "none";
+            let canvas = document.getElementById("previewCanvas");
+            canvas.width = scaleInfo.canvas_w;
+            canvas.height = scaleInfo.canvas_h;
+            
+            currentImage = new Image();
+            currentImage.onload = function() { drawCanvas(); }
+            currentImage.src = "data:image/jpeg;base64," + base64Data;
+        }
+
+        // Canvas ROI Logic
+        const canvas = document.getElementById("previewCanvas");
+        canvas.addEventListener('click', function(e) {
+            if(!scaleInfo || !currentImage) return;
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+            roiPoints.push([x, y]);
+            eel.set_roi_points(roiPoints)();
+            drawCanvas();
+        });
+
+        function drawCanvas() {
+            if(!currentImage) return;
+            let ctx = canvas.getContext("2d");
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(currentImage, 0, 0);
+            
+            if(roiPoints.length > 0) {
+                ctx.strokeStyle = "#00FF66";
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(roiPoints[0][0], roiPoints[0][1]);
+                for(let i=1; i<roiPoints.length; i++) ctx.lineTo(roiPoints[i][0], roiPoints[i][1]);
+                if(roiPoints.length > 1) ctx.lineTo(roiPoints[0][0], roiPoints[0][1]);
+                ctx.stroke();
+                
+                ctx.fillStyle = "#D9383A";
+                for(let pt of roiPoints) {
+                    ctx.beginPath();
+                    ctx.arc(pt[0], pt[1], 4, 0, 2*Math.PI);
+                    ctx.fill();
+                }
+            }
+        }
+
+        // Keyboard bindings
+        document.addEventListener('keydown', function(e) {
+            if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            if(document.getElementById("viewPlayer").classList.contains("active") && currentMode === 'manual') {
+                if(e.code === 'Space') {
+                    e.preventDefault();
+                    eel.play_pause()();
+                } else if(e.code === 'ArrowRight') {
+                    e.preventDefault();
+                    eel.step_frame(1)();
+                } else if(e.code === 'ArrowLeft') {
+                    e.preventDefault();
+                    eel.step_frame(-1)();
+                } else if(e.code === 'KeyC') {
+                    e.preventDefault();
+                    eel.manual_capture()();
+                }
+            }
+        });
+
+        // Global Tab Switch Logic
+        function switchMainTab(tab) {
+            document.getElementById("mainTabPlayer").className = tab === 'player' ? "global-tab-btn active" : "global-tab-btn";
+            document.getElementById("mainTabSR").className = tab === 'sr' ? "global-tab-btn active" : "global-tab-btn";
+            
+            document.getElementById("viewPlayer").className = tab === 'player' ? "main-view active" : "main-view";
+            document.getElementById("viewSR").className = tab === 'sr' ? "main-view active" : "main-view";
+        }
+
+        // SR Workspace Logic
+        let srOriginalBase64 = null;
+        let srEnhancedBase64 = null;
+        let isSRProcessing = false;
+
+        document.getElementById('srFileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if(file) {
+                const reader = new FileReader();
+                reader.onload = function(evt) {
+                    srOriginalBase64 = evt.target.result.split(',')[1];
+                    document.getElementById('srOriginalImg').src = evt.target.result;
+                    document.getElementById('srOriginalImg').style.display = 'block';
+                    document.getElementById('srLeftPlaceholder').style.display = 'none';
+                    
+                    document.getElementById('srEnhancedImg').style.display = 'none';
+                    document.getElementById('srRightPlaceholder').style.display = 'block';
+                    document.getElementById('srRightPlaceholder').textContent = '圖片已載入，請點擊開始 AI 高清化';
+                    srEnhancedBase64 = null;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        async function startSR() {
+            if(isSRProcessing) return;
+            if(!srOriginalBase64) {
+                alert("請先選擇一張原始證物圖片！");
+                return;
+            }
+            
+            isSRProcessing = true;
+            let btn = document.getElementById("btnStartSR");
+            btn.innerHTML = "⏳ AI 鑑識運算中...";
+            btn.style.opacity = "0.5";
+            btn.style.cursor = "not-allowed";
+            
+            document.getElementById("btnAbortSR").style.display = "inline-block";
+            
+            document.getElementById('srRightPlaceholder').style.display = 'block';
+            document.getElementById('srRightPlaceholder').textContent = '🧠 載入深度學習模型並進行像素重建... (或從雲端拉取權重檔)';
+            document.getElementById('srEnhancedImg').style.display = 'none';
+            
+            let mode = document.querySelector('input[name="srMode"]:checked').value;
+            
+            // Call eel non-blocking
+            eel.run_ai_super_resolution(srOriginalBase64, mode)();
+        }
+
+        function abortSR() {
+            if(!isSRProcessing) return;
+            eel.abort_ai_super_resolution()();
+            
+            isSRProcessing = false;
+            let btn = document.getElementById("btnStartSR");
+            btn.innerHTML = "⚡ 開始 AI 高清化";
+            btn.style.opacity = "1";
+            btn.style.cursor = "pointer";
+            
+            document.getElementById("btnAbortSR").style.display = "none";
+            document.getElementById('srRightPlaceholder').style.display = 'block';
+            document.getElementById('srRightPlaceholder').textContent = '⚠️ 已經強制中止修復進程，系統資源已釋放。';
+        }
+
+        eel.expose(on_super_res_finished);
+        function on_super_res_finished(base64Data, errorMsg) {
+            isSRProcessing = false;
+            let btn = document.getElementById("btnStartSR");
+            btn.innerHTML = "⚡ 開始 AI 高清化";
+            btn.style.opacity = "1";
+            btn.style.cursor = "pointer";
+            
+            document.getElementById("btnAbortSR").style.display = "none";
+
+            if(errorMsg) {
+                document.getElementById('srRightPlaceholder').innerHTML = `<span style="color:#FF4444;">${errorMsg}</span>`;
+            } else if (base64Data) {
+                srEnhancedBase64 = base64Data;
+                document.getElementById('srEnhancedImg').src = "data:image/jpeg;base64," + base64Data;
+                document.getElementById('srEnhancedImg').style.display = 'block';
+                document.getElementById('srRightPlaceholder').style.display = 'none';
+            }
+        }
+
+        function saveSR() {
+            if(isSRProcessing) return;
+            if(!srEnhancedBase64) {
+                alert("沒有可保存的高清重建結果！");
+                return;
+            }
+            let mode = document.querySelector('input[name="srMode"]:checked').value;
+            eel.save_enhanced_evidence(srEnhancedBase64, mode)();
+        }
+    </script>
+</body>
+</html>
