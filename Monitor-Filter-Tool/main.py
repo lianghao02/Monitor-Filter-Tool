@@ -185,9 +185,12 @@ def load_preview_frame(video_path):
     try:
         ext = os.path.splitext(video_path)[1].lower()
         fmt = None
-        if ext in ['.265', '.h265']: fmt = 'hevc'
-        elif ext in ['.264', '.h264', '.dav']: fmt = 'h264'
-        elif ext in ['.ts']: fmt = 'mpegts'
+        if ext in ['.265', '.h265']:
+            fmt = 'hevc'
+        elif ext in ['.264', '.h264', '.dav']:
+            fmt = 'h264'
+        elif ext in ['.ts']:
+            fmt = 'mpegts'
         
         fh = open(video_path, 'rb')
         try:
@@ -230,8 +233,10 @@ def load_preview_frame(video_path):
         print(f"Failed to load preview: {e}")
     finally:
         if container:
-            try: container.close()
-            except: pass
+            try:
+                container.close()
+            except Exception:
+                pass
         if fh:
             fh.close()
 
@@ -276,7 +281,7 @@ def batch_processing_worker(settings):
 
     except Exception as e:
         err_msg = traceback.format_exc()
-        eel.updateStatus(f"系統崩潰", "danger")
+        eel.updateStatus("系統崩潰", "danger")
         eel.appendLog(f"系統崩潰: {str(e)}", "error")
         print(err_msg)
     finally:
@@ -288,7 +293,7 @@ def parse_start_time(filename):
     if match:
         try:
             return datetime.strptime(match.group(1), "%Y%m%d%H%M%S")
-        except:
+        except Exception:
             pass
     return None
 
@@ -320,9 +325,12 @@ def process_single_video(video_path, video_name, settings):
     try:
         ext = os.path.splitext(video_path)[1].lower()
         fmt = None
-        if ext in ['.265', '.h265']: fmt = 'hevc'
-        elif ext in ['.264', '.h264', '.dav']: fmt = 'h264'
-        elif ext in ['.ts']: fmt = 'mpegts'
+        if ext in ['.265', '.h265']:
+            fmt = 'hevc'
+        elif ext in ['.264', '.h264', '.dav']:
+            fmt = 'h264'
+        elif ext in ['.ts']:
+            fmt = 'mpegts'
 
         # PyAV 記憶體解碼，0 秒直通，透過 Python handle 避開 Windows 中文路徑解碼問題
         fh = open(video_path, 'rb')
@@ -334,7 +342,8 @@ def process_single_video(video_path, video_name, settings):
         stream.thread_type = "AUTO"
         
         fps = float(stream.average_rate) if stream.average_rate else 30.0
-        if fps <= 0: fps = 30.0
+        if fps <= 0:
+            fps = 30.0
         
         total_frames = stream.frames
         if total_frames <= 0:
@@ -392,7 +401,8 @@ def process_single_video(video_path, video_name, settings):
         last_ui_update = time.time()
         
         while True:
-            if stop_requested: break
+            if stop_requested:
+                break
             
             with player_lock:
                 req_seek = player_state['seek_req']
@@ -528,11 +538,14 @@ def process_single_video(video_path, video_name, settings):
 
                 if boxes is not None:
                     for box in boxes:
-                        if box.id is None: continue
+                        if box.id is None:
+                            continue
                         conf = float(box.conf[0])
-                        if conf < conf_thresh: continue
+                        if conf < conf_thresh:
+                            continue
                         cls_id = int(box.cls[0])
-                        if cls_id not in CONFIG.TARGET_CLASSES or not class_vars.get(str(cls_id), True): continue
+                        if cls_id not in CONFIG.TARGET_CLASSES or not class_vars.get(str(cls_id), True):
+                            continue
 
                         raw_tid = int(box.id[0])
                         tid = id_alias_map.get(raw_tid, raw_tid)
@@ -568,8 +581,10 @@ def process_single_video(video_path, video_name, settings):
                     if tid not in track_states:
                         matched_old_tid = None
                         for old_tid, old_state in track_states.items():
-                            if old_state['class_name'] != cls_name: continue
-                            if old_state['last_seen_msec'] == milliseconds: continue
+                            if old_state['class_name'] != cls_name:
+                                continue
+                            if old_state['last_seen_msec'] == milliseconds:
+                                continue
                             
                             time_diff = milliseconds - old_state['last_seen_msec']
                             if 0 < time_diff <= 1500:
@@ -642,12 +657,14 @@ def process_single_video(video_path, video_name, settings):
     except Exception as e:
         err_msg = traceback.format_exc()
         eel.appendLog(f"[{video_name}] 解碼毀損診斷: {str(e)}", "error")
-        eel.appendLog(f"處置建議: 可能是編碼異常或檔案殘缺，請重新提取原始檔案。", "warn")
+        eel.appendLog("處置建議: 可能是編碼異常或檔案殘缺，請重新提取原始檔案。", "warn")
         print(f"Exception for {video_name}:\n{err_msg}")
     finally:
         if container:
-            try: container.close()
-            except: pass
+            try:
+                container.close()
+            except Exception:
+                pass
         if fh:
             fh.close()
 
@@ -768,7 +785,7 @@ def check_and_download_sr_model():
             print(">>> [系統動作] AI 模型下載完成！")
         except Exception as e:
             print(f"❌ [數位鑑識崩潰]：模型權重檔下載失敗 ({e})")
-            print(f"💡 [系統處置建議]：請確認對外網路連線，或手動將 ESPCN_x2.pb 放置於專案根目錄。")
+            print("💡 [系統處置建議]：請確認對外網路連線，或手動將 ESPCN_x2.pb 放置於專案根目錄。")
             if os.path.exists(SR_MODEL_PATH):
                 os.remove(SR_MODEL_PATH)
             return False
@@ -847,7 +864,7 @@ def run_ai_super_resolution(base64_str, mode='plate'):
             
         except Exception as e:
             print(f"❌ [數位鑑識崩潰]：超解析引擎運算錯誤 ({e})")
-            print(f"💡 [系統處置建議]：請確認 OpenCV dnn 模組支援，或嘗試重新選擇圖片。")
+            print("💡 [系統處置建議]：請確認 OpenCV dnn 模組支援，或嘗試重新選擇圖片。")
             eel.on_super_res_finished(None, f"❌ 運算發生錯誤：{e}")()
             
     Thread(target=_run_sr, daemon=True).start()
@@ -873,13 +890,13 @@ def save_enhanced_evidence(base64_str, mode='plate'):
         try:
             import subprocess
             subprocess.run(['explorer', '/select,', os.path.normpath(filepath)])
-        except:
+        except Exception:
             pass
             
         return True
     except Exception as e:
         print(f"❌ [數位鑑識崩潰]：修復檔案寫入失敗 ({e})")
-        print(f"💡 [系統處置建議]：請確認 enhanced_evidence 目錄未被防毒軟體或隨身碟唯讀保護。")
+        print("💡 [系統處置建議]：請確認 enhanced_evidence 目錄未被防毒軟體或隨身碟唯讀保護。")
         return False
 
 if __name__ == "__main__":
