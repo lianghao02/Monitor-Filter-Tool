@@ -16,8 +16,8 @@ if %errorlevel% equ 0 (
     if errorlevel 1 (
         echo [InBox] Installing required forensic modules in background... Please wait...
         python -m pip uninstall -y opencv-python >nul 2>&1
-        python -m pip install eel ultralytics opencv-contrib-python av
-        python -c "import eel; import av; import ultralytics; import cv2" >nul 2>&1
+        python -m pip install eel ultralytics opencv-contrib-python av lap lapx
+        python -c "import eel; import av; import ultralytics; import cv2; import lap" >nul 2>&1
         if errorlevel 1 (
             echo [!] Failed to install modules.
             echo [-^>] Switching to portable mode...

@@ -1,5 +1,8 @@
 import os
 os.environ["OPENCV_FFMPEG_LOG_LEVEL"] = "-1"
+os.environ["PYAV_LOGGING"] = "off"
+os.environ["YOLO_VERBOSE"] = "False"
+os.environ["YOLO_OFFLINE"] = "True"
 import cv2
 import numpy as np
 import time
@@ -16,6 +19,7 @@ import tkinter as tk
 from tkinter import filedialog
 import av
 import traceback
+from ultralytics import YOLO
 
 class CONFIG:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -256,7 +260,6 @@ def batch_processing_worker(settings):
     try:
         if model is None:
             eel.updateStatus("狀態: 正在載入 YOLO 大腦...", "ok")
-            from ultralytics import YOLO
             model = YOLO("yolov8n.pt")  
 
         with list_lock:
@@ -339,7 +342,7 @@ def process_single_video(video_path, video_name, settings):
         except Exception:
             container = av.open(video_path, format=fmt, metadata_errors='ignore')
         stream = container.streams.video[0]
-        stream.thread_type = "AUTO"
+        stream.thread_type = "NONE"
         
         fps = float(stream.average_rate) if stream.average_rate else 30.0
         if fps <= 0:
@@ -351,6 +354,18 @@ def process_single_video(video_path, video_name, settings):
                 total_frames = int(float(stream.duration * stream.time_base) * fps)
             else:
                 total_frames = 1000
+
+        # Dynamically update scale_info for the current video dimensions
+        global scale_info
+        img_w = stream.width if stream.width else 800
+        img_h = stream.height if stream.height else 600
+        canvas_w = 800
+        canvas_h = 600
+        scale = min(canvas_w / img_w, canvas_h / img_h)
+        new_w, new_h = int(img_w * scale), int(img_h * scale)
+        pad_x = (canvas_w - new_w) // 2
+        pad_y = (canvas_h - new_h) // 2
+        scale_info = (scale, pad_x, pad_y, img_w, img_h)
 
         conf_thresh = settings['confThresh']
         capture_mode = settings.get('captureMode', '')
@@ -369,13 +384,16 @@ def process_single_video(video_path, video_name, settings):
         decoded_frame_idx = -1
         is_dynamic_mode = False
         dynamic_lock_until = 0
+        no_target_frames = 0
         
+        stream.codec_context.skip_frame = 'NONKEY'
         frame_iter = container.decode(stream)
         current_av_frame = None
         
         def get_frame(target_idx):
             nonlocal current_av_frame, decoded_frame_idx, frame_iter
-            if target_idx < decoded_frame_idx:
+            
+            if target_idx < decoded_frame_idx or (target_idx - decoded_frame_idx) > 30:
                 pts = int(target_idx / fps / float(stream.time_base))
                 container.seek(pts, stream=stream, backward=True)
                 frame_iter = container.decode(stream)
@@ -416,6 +434,8 @@ def process_single_video(video_path, video_name, settings):
                 player_state['manual_capture_req'] = False
 
             if engine_mode == 'manual':
+                if stream.codec_context.skip_frame != 'DEFAULT':
+                    stream.codec_context.skip_frame = 'DEFAULT'
                 target_idx = target_frame_idx
                 
                 if req_seek is not None:
@@ -460,7 +480,7 @@ def process_single_video(video_path, video_name, settings):
                     cv2.putText(annotated, osd_text, (10, frame_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
                     now = time.time()
-                    if now - last_ui_update > 0.03:
+                    if not is_play or (now - last_ui_update > 0.03):
                         push_frame_to_ui(annotated)
                         eel.updateProgress(min(100, (target_idx / total_frames) * 100), time_code_str)
                         last_ui_update = now
@@ -477,9 +497,24 @@ def process_single_video(video_path, video_name, settings):
                 skip_sec = float(global_live_settings.get('skipSec', skip_sec))
                 static_skip_step = int(fps * skip_sec)
                 
-                frame = get_frame(target_frame_idx)
-                if frame is None:
-                    break
+                # 依據動態狀態切換解碼模式
+                if not is_dynamic_mode:
+                    stream.codec_context.skip_frame = 'NONKEY'  # 靜態空景：只解碼關鍵影格
+                    try:
+                        while True:
+                            current_av_frame = next(frame_iter)
+                            decoded_frame_idx = int(float(current_av_frame.pts * stream.time_base) * fps) if current_av_frame.pts else decoded_frame_idx + 1
+                            if decoded_frame_idx >= target_frame_idx:
+                                target_frame_idx = decoded_frame_idx
+                                frame = current_av_frame.to_ndarray(format='bgr24')
+                                break
+                    except StopIteration:
+                        break
+                else:
+                    stream.codec_context.skip_frame = 'DEFAULT'  # 動態追蹤：逐幀完整解碼
+                    frame = get_frame(target_frame_idx)
+                    if frame is None:
+                        break
 
                 milliseconds = (target_frame_idx / fps) * 1000
                 time_code_str = format_timecode(milliseconds, start_time_dt)
@@ -489,48 +524,7 @@ def process_single_video(video_path, video_name, settings):
                     eel.updateProgress(min(100, (target_frame_idx / total_frames) * 100), time_code_str)
                     last_ui_update = now
 
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                roi_mask = np.zeros(gray.shape, dtype=np.uint8)
-                if real_roi_poly is not None:
-                    cv2.fillPoly(roi_mask, [real_roi_poly], 255)
-                else:
-                    roi_mask[:] = 255
-                    
-                gray_roi = cv2.bitwise_and(gray, gray, mask=roi_mask)
-
-                if anchor_gray is None:
-                    anchor_gray = gray_roi
-                    target_frame_idx += dynamic_step if is_dynamic_mode else static_skip_step
-                    continue
-
-                diff = cv2.absdiff(anchor_gray, gray_roi)
-                _, thresh = cv2.threshold(diff, CONFIG.MOTION_THRESH, 255, cv2.THRESH_BINARY)
-                motion_area = cv2.countNonZero(thresh)
-                motion_detected = (motion_area >= CONFIG.MOTION_MIN_AREA)
-
-                if is_dynamic_mode and target_frame_idx < dynamic_lock_until:
-                    motion_detected = True
-
-                if not is_dynamic_mode:
-                    if motion_detected:
-                        dynamic_lock_until = target_frame_idx
-                        target_frame_idx = max(0, target_frame_idx - static_skip_step)
-                        is_dynamic_mode = True
-                        anchor_gray = None  
-                        continue
-                    else:
-                        anchor_gray = gray_roi
-                        target_frame_idx += static_skip_step
-                        _run_grace_period_gc(milliseconds, track_states, capture_mode, output_dir)
-                        continue
-                else:
-                    if not motion_detected and target_frame_idx >= dynamic_lock_until:
-                        is_dynamic_mode = False
-                        anchor_gray = gray_roi
-                        target_frame_idx += static_skip_step
-                        _run_grace_period_gc(milliseconds, track_states, capture_mode, output_dir)
-                        continue
-
+                # ---------------- YOLO Detection ----------------
                 results = model.track(frame, persist=True, tracker="bytetrack.yaml", verbose=False)[0]
                 boxes = results.boxes
                 annotated_frame = frame.copy()
@@ -560,7 +554,6 @@ def process_single_video(video_path, video_name, settings):
 
                         if inside_roi:
                             valid_targets.append({'tid': tid, 'raw_tid': raw_tid, 'conf': conf, 'cls_id': cls_id, 'xyxy': (x1, y1, x2, y2)})
-                            # 1px thickness requirements
                             cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 0, 255), 1)
                             cv2.putText(annotated_frame, f"ID:{tid} {CONFIG.TARGET_CLASSES[cls_id]} {conf:.2f}",
                                 (x1, max(15, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
@@ -568,6 +561,46 @@ def process_single_video(video_path, video_name, settings):
                 if real_roi_poly is not None:
                     cv2.polylines(annotated_frame, [real_roi_poly], True, (0, 255, 0), 1)
 
+                # ---------------- Motion & Skip Logic ----------------
+                motion_detected = len(valid_targets) > 0
+
+                if motion_detected:
+                    no_target_frames = 0
+                else:
+                    no_target_frames += 1
+
+                if is_dynamic_mode:
+                    if no_target_frames < int(fps * 1.5):
+                        motion_detected = True
+
+                if is_dynamic_mode and target_frame_idx < dynamic_lock_until:
+                    motion_detected = True
+
+                if not is_dynamic_mode:
+                    if motion_detected:
+                        dynamic_lock_until = target_frame_idx
+                        target_frame_idx = max(0, target_frame_idx - static_skip_step)
+                        is_dynamic_mode = True
+                        
+                        stream.codec_context.skip_frame = 'DEFAULT'
+                        pts = int(target_frame_idx / fps / float(stream.time_base))
+                        container.seek(pts, stream=stream, backward=True)
+                        frame_iter = container.decode(stream)
+                        decoded_frame_idx = -1
+                        current_av_frame = None
+                        continue
+                    else:
+                        _run_grace_period_gc(milliseconds, track_states, capture_mode, output_dir)
+                        target_frame_idx += static_skip_step
+                        continue
+                else:
+                    if not motion_detected and target_frame_idx >= dynamic_lock_until:
+                        is_dynamic_mode = False
+                        target_frame_idx += static_skip_step
+                        _run_grace_period_gc(milliseconds, track_states, capture_mode, output_dir)
+                        continue
+
+                # ---------------- Track States Management ----------------
                 for target in valid_targets:
                     raw_tid = target['raw_tid']
                     tid = target['tid']
@@ -600,22 +633,26 @@ def process_single_video(video_path, video_name, settings):
                             id_alias_map[raw_tid] = matched_old_tid
                             tid = matched_old_tid
                             summary_str = f"ID:{tid} {cls_name}"
-                            eel.appendLog(f"[{time_code_str}] 偵測到 ID 跳變自動縫合身分 (新:{raw_tid} -> 舊:{tid})", "warn")
-
-                    if tid not in track_states:
-                        track_states[tid] = {
-                            'class_name': cls_name, 'best_conf': conf, 'best_frame': annotated_frame.copy(),
-                            'best_timecode': time_code_str, 'best_summary': [f"{summary_str}({conf:.2f} Peak)"],
-                            'last_frame': annotated_frame.copy(), 'last_timecode': time_code_str,
-                            'last_seen_msec': milliseconds, 'last_continuous_capture_msec': milliseconds,
-                            'last_centroid': (cx, cy), 'last_box_size': (w, h)
-                        }
-                        if capture_mode in ["雙格蒐證模式 (起點+最清晰)", "單次最清晰模式 (推薦)", "事件起訖模式"]:
-                            save_legal_screenshot(annotated_frame, output_dir, time_code_str, [f"{summary_str}(Entry)"])
-                            eel.appendLog(f"[{time_code_str}] 擷取 {summary_str}(Entry)", "success")
-                        elif capture_mode == "持續追蹤模式 (預設)":
-                            save_legal_screenshot(annotated_frame, output_dir, time_code_str, [f"{summary_str}(Track-Entry)"])
-                            eel.appendLog(f"[{time_code_str}] 擷取 {summary_str}(Track-Entry)", "success")
+                        else:
+                            track_states[tid] = {
+                                'class_name': cls_name,
+                                'best_conf': conf,
+                                'best_frame': annotated_frame.copy(),
+                                'best_timecode': time_code_str,
+                                'best_summary': [f"{summary_str}({conf:.2f} Peak)"],
+                                'last_frame': annotated_frame.copy(),
+                                'last_timecode': time_code_str,
+                                'last_seen_msec': milliseconds,
+                                'last_continuous_capture_msec': milliseconds,
+                                'last_centroid': (cx, cy),
+                                'last_box_size': (w, h)
+                            }
+                            if capture_mode in ["雙格蒐證模式 (起點+最清晰)", "事件起訖模式"]:
+                                save_legal_screenshot(annotated_frame, output_dir, time_code_str, [f"{summary_str}(Entry)"])
+                                eel.appendLog(f"[{time_code_str}] 擷取 {summary_str}(Entry)", "success")
+                            elif capture_mode == "持續追蹤模式 (預設)":
+                                save_legal_screenshot(annotated_frame, output_dir, time_code_str, [f"{summary_str}(Track-Entry)"])
+                                eel.appendLog(f"[{time_code_str}] 擷取 {summary_str}(Track-Entry)", "success")
                     else:
                         state = track_states[tid]
                         state['last_seen_msec'] = milliseconds
@@ -637,6 +674,13 @@ def process_single_video(video_path, video_name, settings):
                             save_legal_screenshot(annotated_frame, output_dir, time_code_str, [f"{summary_str}(Track)"])
                             eel.appendLog(f"[{time_code_str}] 擷取 {summary_str}(Track)", "success")
 
+                if engine_mode == 'auto' and is_dynamic_mode:
+                    current_targets_str = ", ".join([f"ID:{t['tid']} {CONFIG.TARGET_CLASSES[t['cls_id']]}" for t in valid_targets])
+                    if current_targets_str:
+                        eel.updateStatus(f"狀態: 正在分析 (發現目標: {current_targets_str})", "ok")
+                    else:
+                        eel.updateStatus(f"狀態: 正在分析 (追蹤中...)", "ok")
+
                 # Draw OSD Timecode
                 frame_h, frame_w = annotated_frame.shape[:2]
                 osd_text = f"AG-MONITOR | {time_code_str}"
@@ -648,6 +692,7 @@ def process_single_video(video_path, video_name, settings):
                     push_frame_to_ui(annotated_frame)
                     
                 _run_grace_period_gc(milliseconds, track_states, capture_mode, output_dir)
+
                 target_frame_idx += 1 
 
         if engine_mode == 'auto':
@@ -719,18 +764,18 @@ def save_legal_screenshot(frame, output_dir, time_code, objects_list):
     draw = ImageDraw.Draw(pil_img)
 
     try:
-        font = ImageFont.truetype("msjh.ttc", 20)
-        small_font = ImageFont.truetype("msjh.ttc", 14)
+        font = ImageFont.truetype("msjh.ttc", 16)
+        small_font = ImageFont.truetype("msjh.ttc", 12)
     except Exception:
         try:
-            font = ImageFont.truetype("arial.ttf", 20)
-            small_font = ImageFont.truetype("arial.ttf", 14)
+            font = ImageFont.truetype("arial.ttf", 16)
+            small_font = ImageFont.truetype("arial.ttf", 12)
         except Exception:
             font = ImageFont.load_default()
             small_font = ImageFont.load_default()
 
     w, h = pil_img.size
-    watermark_text = f"AG-MONITOR [ Timecode: {time_code} ]"
+    watermark_text = f"AG-MONITOR | Timecode: {time_code}"
     detail_text = f"Target: {', '.join(objects_list)}"
 
     text_bbox = draw.textbbox((0, 0), watermark_text, font=font)
@@ -739,24 +784,40 @@ def save_legal_screenshot(frame, output_dir, time_code, objects_list):
     det_bbox = draw.textbbox((0, 0), detail_text, font=small_font)
     dw = det_bbox[2] - det_bbox[0]
     
-    box_w = max(tw, dw) + 40
-    box_h = 60
+    box_w = max(tw, dw) + 30
+    box_h = 45
     
-    bx1 = (w - box_w) // 2
-    by1 = h - box_h - 10
+    bx1 = 15
+    by1 = h - box_h - 15
     bx2 = bx1 + box_w
     by2 = by1 + box_h
     
-    draw.rectangle([(bx1, by1), (bx2, by2)], fill=(0, 0, 0, 180))
-    draw.text((bx1 + 20, by1 + 5), watermark_text, fill=(255, 255, 0), font=font)
-    draw.text((bx1 + 20, by1 + 35), detail_text, fill=(255, 255, 255), font=small_font)
+    overlay = Image.new('RGBA', pil_img.size, (255, 255, 255, 0))
+    overlay_draw = ImageDraw.Draw(overlay)
+    
+    # 120 is roughly 47% opacity for the background
+    overlay_draw.rectangle([(bx1, by1), (bx2, by2)], fill=(0, 0, 0, 120))
+    overlay_draw.text((bx1 + 15, by1 + 5), watermark_text, fill=(255, 255, 0, 255), font=font)
+    overlay_draw.text((bx1 + 15, by1 + 25), detail_text, fill=(255, 255, 255, 255), font=small_font)
 
-    safe_time_str = time_code.replace(":", "-").replace(".", "-")
+    pil_img = pil_img.convert("RGBA")
+    pil_img = Image.alpha_composite(pil_img, overlay)
+    pil_img = pil_img.convert("RGB")
+
+    safe_time_str = time_code.replace("/", "-").replace(":", "-").replace(".", "-")
     filename = f"evidence_{safe_time_str}.jpg"
     final_path = os.path.join(output_dir, filename)
 
     final_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-    cv2.imwrite(final_path, final_bgr)
+    try:
+        is_success, buffer = cv2.imencode('.jpg', final_bgr)
+        if is_success:
+            with open(final_path, 'wb') as f:
+                f.write(buffer)
+        else:
+            print(f"[DEBUG] cv2.imencode failed for {final_path}")
+    except Exception as e:
+        print(f"[DEBUG] save_legal_screenshot exception: {e}")
 
 # ==========================================
 # 數位鑑識 AI 影像超解析工作站 (Super-Resolution)
@@ -830,10 +891,15 @@ def run_ai_super_resolution(base64_str, mode='plate'):
                 else:
                     if sr_abort_flag:
                         return
-                    sr = cv2.dnn_superresolution.DnnSuperResolutionImpl_create()
-                    sr.readModel(SR_MODEL_PATH)
-                    sr.setModel("espcn", 2)
-                    result = sr.upsample(img)
+                    try:
+                        sr = cv2.dnn_superresolution.DnnSuperResolutionImpl_create()
+                        sr.readModel(SR_MODEL_PATH)
+                        sr.setModel("espcn", 2)
+                        result = sr.upsample(img)
+                    except Exception as dnn_err:
+                        print(f">>> [系統警告] DNN 超解析執行失敗 ({dnn_err})，自動切換至第二軌備援流程！")
+                        warning_msg = "⚠️ [備援提示] AI 核心模組運算異常，已自動切換為第二軌高階銳化鑑識模態。"
+                        fallback_triggered = True
             else:
                 fallback_triggered = True
 

@@ -5,21 +5,21 @@
 📋 存放位置與功能摘要
 
 ==================================================
-一、全域層級 (Skill)
+一、全域行為準則 (Global Rules & Skill)
 ==================================================
-📌 標準存放路徑：C:\Users\chia-hao\.antigravity\skill.json
-(或系統 IDE 特有配置路徑，如 C:\Users\chia-hao\.gemini\antigravity-ide\...)
+📌 標準存放路徑：C:\Users\chia-hao\.gemini\config\AGENTS.md
+(舊版相容與備份路徑：C:\Users\chia-hao\.antigravity\skills\development_constitution\)
 
 功能定義：定義 AI 的「核心靈魂」與全域行為準則。
 目前設定：
 1. 角色設定：Tech Lead (梁巡官)
 2. 語言規範：強制使用台灣繁體中文 (zh-TW)
-3. 開發憲法：遵循「全域開發憲法 v1.1 ~ v1.4」，確保高品質與安全性。
+3. 開發憲法：遵循「全域開發憲法 v5.0 終極大一統版」，支援技術選型、驗證先行 (Verification First)、現代化 UI/UX 底線與子代理分工。
 
 ==================================================
 二、專案層級 (Rules)
 ==================================================
-📌 標準存放路徑：C:\Users\chia-hao\Documents\GitHub\<專案名稱>\.antigravity\rules.md (以及 skill.json)
+📌 標準存放路徑：C:\Users\chia-hao\Documents\GitHub\<專案名稱>\.agents\AGENTS.md (舊版相容為 .antigravity\rules.md)
 
 功能定義：定義該專案獨特的「業務領域知識」與技術規範。
 
@@ -28,7 +28,7 @@
 1. 手機門號即時定位 (Cell-Tower-Map-Locator)
 - 核心精神：警務定位資訊，隱私與離線運算為最高原則。
 - 業務領域知識：使用 Leaflet 整合 (L.polygon 繪製扇形)、坐標換算與台灣邊界驗證 (Lat 21-27, Lng 118-124)。
-- UI/UX：Mobile-First 設計，支援一鍵點擊 URL 封裝定位，並透過 `esc()` 函式防範 XSS 攻擊。
+- UI/UX 與架構：Mobile-First 設計，專案已重構為 HTML/CSS/JS 模組化分離，支援一鍵點擊 URL 封裝定位，並透過 `esc()` 函式防範 XSS 攻擊。
 
 2. 警務影像轉換器 (Image-Format-Converter)
 - 核心精神：全本機離線運算 (Offline-First)，嚴禁上傳第三方伺服器。
@@ -52,7 +52,7 @@
 ==================================================
 三、⚠️ 尚未建立 Rules 的專案清單
 ==================================================
-經掃描 C:\Users\chia-hao\Documents\GitHub\ 目錄，以下專案尚未建立 `.antigravity\rules.md`。建議您可以為它們補充專屬的領域知識庫，讓 AI 能更準確地進入該專案的情境：
+經掃描 C:\Users\chia-hao\Documents\GitHub\ 目錄，以下專案尚未建立 `.agents\AGENTS.md`。建議您可以為它們補充專屬的領域知識庫，讓 AI 能更準確地進入該專案的情境：
 
 1. Calendar-Card-App
 2. Smart-Photo-Organizer

@@ -800,6 +800,48 @@
             }
         });
 
+        // Drag & Drop Implementation for Photo Repair
+        const srCanvasWrap = document.querySelector('.sr-panel-left .sr-canvas-wrap');
+        srCanvasWrap.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            srCanvasWrap.style.borderColor = 'var(--accent-green)';
+            srCanvasWrap.style.background = 'rgba(0, 255, 102, 0.05)';
+        });
+        
+        srCanvasWrap.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            srCanvasWrap.style.borderColor = '#444';
+            srCanvasWrap.style.background = '#000';
+        });
+        
+        srCanvasWrap.addEventListener('drop', function(e) {
+            e.preventDefault();
+            srCanvasWrap.style.borderColor = '#444';
+            srCanvasWrap.style.background = '#000';
+            
+            const files = e.dataTransfer.files;
+            if (files && files.length > 0) {
+                const file = files[0];
+                if (file.type.startsWith('image/')) {
+                    const reader = new FileReader();
+                    reader.onload = function(evt) {
+                        srOriginalBase64 = evt.target.result.split(',')[1];
+                        document.getElementById('srOriginalImg').src = evt.target.result;
+                        document.getElementById('srOriginalImg').style.display = 'block';
+                        document.getElementById('srLeftPlaceholder').style.display = 'none';
+                        
+                        document.getElementById('srEnhancedImg').style.display = 'none';
+                        document.getElementById('srRightPlaceholder').style.display = 'block';
+                        document.getElementById('srRightPlaceholder').textContent = '圖片已載入，請點擊開始 AI 高清化';
+                        srEnhancedBase64 = null;
+                    };
+                    reader.readAsDataURL(file);
+                } else {
+                    alert("請拖曳圖片格式檔案！");
+                }
+            }
+        });
+
         async function startSR() {
             if(isSRProcessing) return;
             if(!srOriginalBase64) {
