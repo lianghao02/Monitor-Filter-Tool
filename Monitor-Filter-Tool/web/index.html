@@ -371,14 +371,25 @@
         <div class="section queue-section">
             <div class="section-title">【1. 待處理證物清單】</div>
             <div class="btn-group">
-                <button class="btn btn-default" onclick="addVideos()">📁 匯入影片</button>
-                <button class="btn btn-default" onclick="clearQueue()">🗑️ 清除清單</button>
+                <button class="btn btn-default" style="flex:1; font-size:12px; padding: 6px 4px;" onclick="addVideos()">📁 匯入影片</button>
+                <button class="btn btn-default" style="flex:1; font-size:12px; padding: 6px 4px;" onclick="addFolder()">📂 匯入資料夾</button>
+                <button class="btn btn-default" style="flex:1; font-size:12px; padding: 6px 4px;" onclick="batchRename()">🏷️ 校正檔名</button>
+                <button class="btn btn-default" style="flex:1; font-size:12px; padding: 6px 4px;" onclick="clearQueue()">🗑️ 清除</button>
             </div>
             <div class="queue-box" id="queueList"></div>
         </div>
 
         <div class="section auto-ai-controls">
             <div class="section-title">【2. 智慧辨識設定】</div>
+            
+            <div style="margin-bottom: 15px;">
+                <label style="font-size:14px; margin-bottom:5px; display:block;">AI 核心大腦 (模型選擇):</label>
+                <select id="aiModel" class="cyber-select" style="margin-bottom: 5px;">
+                    <option value="yolov8n.pt" selected>🏎️ 極速先鋒引擎 (Nano - 速度最快)</option>
+                    <option value="yolov8s.pt">🦅 鷹眼精準引擎 (Small - 遠距/模糊特化)</option>
+                </select>
+            </div>
+
             <div class="slider-group">
                 <div class="slider-header">
                     <span>AI 靈敏度門檻:</span>
@@ -402,9 +413,9 @@
             <div class="slider-group">
                 <div class="slider-header">
                     <span>空景安全閃現跳躍間隔 (秒):</span>
-                    <span id="skipSecVal" class="highlight-val">0.20s [標準]</span>
+                    <span id="skipSecVal" class="highlight-val" style="color: #00ffcc;">0.2s [標準安全]</span>
                 </div>
-                <input type="range" id="skipSecSlider" min="0.05" max="1.0" step="0.05" value="0.20">
+                <input type="range" id="skipSecSlider" min="0.1" max="5.0" step="0.1" value="0.2">
             </div>
         </div>
 
@@ -415,6 +426,9 @@
                 <option value="持續追蹤模式 (預設)">動態定時連拍 (依設定秒數連續拍照)</option>
                 <option value="事件起訖模式">進出瞬間捕捉 (僅抓進入與離開首尾兩張)</option>
             </select>
+            <label style="display:flex; align-items:center; gap:8px; margin-top:10px; font-size:14px; cursor:pointer;">
+                <input type="checkbox" id="singleFolder"> 將本次批次結果集中於單一資料夾
+            </label>
         </div>
 
         <div class="section" style="margin-bottom: 0;">
@@ -475,6 +489,17 @@
                 <span id="statusText" class="status-ok">狀態: 系統準備就緒</span>
                 <span id="progressText">0%</span>
             </div>
+            
+            <div id="unifiedProgressContainer" style="display: none; padding: 6px 10px; background: #111; border-bottom: 1px solid #333;">
+                <div style="display: flex; justify-content: space-between; font-size: 12px; color: #00FF66; margin-bottom: 4px;">
+                    <span id="unifiedProgressLabel" style="font-weight: bold;">分析中...</span>
+                    <span id="unifiedProgressPct">0%</span>
+                </div>
+                <div style="width: 100%; height: 8px; background: #222; border-radius: 4px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);">
+                    <div id="unifiedProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #00b34a, #00FF66); transition: width 0.1s linear;"></div>
+                </div>
+            </div>
+
             <div class="log-box" id="logBox">
                 <div class="log-entry info">系統已初始化，等待任務...</div>
             </div>
@@ -534,8 +559,15 @@
         const skipSecSlider = document.getElementById("skipSecSlider");
         const skipSecVal = document.getElementById("skipSecVal");
         skipSecSlider.oninput = function() {
-            skipSecVal.textContent = parseFloat(this.value).toFixed(2) + "s [標準]"; 
-            if(isProcessing) eel.update_live_setting('skipSec', parseFloat(this.value))();
+            let val = parseFloat(this.value);
+            let label = val <= 1.0 ? "s [標準安全]" : "s [極速/大場景限定]";
+            skipSecVal.textContent = val.toFixed(1) + label; 
+            if(val <= 1.0) {
+                skipSecVal.style.color = "#00ffcc";
+            } else {
+                skipSecVal.style.color = "#ff9900";
+            }
+            if(isProcessing) eel.update_live_setting('skipSec', val)();
         };
 
         const fastModeCb = document.getElementById("fastMode");
@@ -543,10 +575,82 @@
             if(isProcessing) eel.update_live_setting('fastMode', this.checked)();
         };
 
+        document.getElementById("captureMode").onchange = function() {
+            if(isProcessing) eel.update_live_setting('captureMode', this.value)();
+        };
+
+        function updateLiveClasses() {
+            if(isProcessing) {
+                let classes = {
+                    "0": document.getElementById("cls_person").checked,
+                    "1": document.getElementById("cls_bicycle").checked,
+                    "2": document.getElementById("cls_car").checked,
+                    "3": document.getElementById("cls_motorcycle").checked
+                };
+                eel.update_live_setting('classes', classes)();
+            }
+        }
+        document.getElementById("cls_person").onchange = updateLiveClasses;
+        document.getElementById("cls_bicycle").onchange = updateLiveClasses;
+        document.getElementById("cls_car").onchange = updateLiveClasses;
+        document.getElementById("cls_motorcycle").onchange = updateLiveClasses;
+        document.getElementById("singleFolder").onchange = function() {
+            if(isProcessing) eel.update_live_setting('singleFolder', this.checked)();
+        };
+
         const timeline = document.getElementById("timeline");
         timeline.oninput = function() {
             if(currentMode === 'manual') eel.seek_frame(parseFloat(this.value))();
         };
+
+        async function batchRename() {
+            if(isProcessing) {
+                appendLog("分析中無法重新命名檔案", "error");
+                return;
+            }
+            
+            let keepOld = confirm("系統即將把清單內的影片換算回真實時間。\n\n請問是否要【保留原始檔名】作為安全對照？\n\n[確定 / OK] = 保留 (安全無損，強烈推薦)\n[取消 / Cancel] = 不保留 (極致乾淨，舊檔名將永久刪除)");
+            
+            let res = await eel.batch_rename_videos(keepOld)();
+            if(!res.success) {
+                appendLog("重新命名失敗: " + res.msg, "error");
+                return;
+            }
+            let queueBox = document.getElementById("queueList");
+            queueBox.innerHTML = "";
+            for(let p of res.new_paths) {
+                let item = document.createElement("div");
+                item.className = "queue-item";
+                item.textContent = p.split(/[\\/]/).pop();
+                queueBox.appendChild(item);
+            }
+            
+            appendLog(`智能校正檔名完成！共修改了 ${res.count} 個檔案`, "success");
+            
+            // 強勢的完成提示，讓使用者明確知道瞬間完成了
+            alert(`✅ 檔案名稱已全部校正完畢！\n\n系統已修改了 ${res.count} 個實體檔案。\n您可以直接開始進行 AI 證據過濾了！`);
+        }
+        
+        function showUnifiedProgress(label, pct) {
+            let container = document.getElementById("unifiedProgressContainer");
+            container.style.display = "block";
+            document.getElementById("unifiedProgressLabel").innerText = label;
+            document.getElementById("unifiedProgressPct").innerText = pct.toFixed(1) + "%";
+            document.getElementById("unifiedProgressBar").style.width = pct + "%";
+        }
+
+        function hideUnifiedProgress() {
+            document.getElementById("unifiedProgressContainer").style.display = "none";
+        }
+
+        eel.expose(updateRenameProgress);
+        function updateRenameProgress(current, total) {
+            let pct = total > 0 ? (current / total) * 100 : 0;
+            showUnifiedProgress(`🏷️ 檔案校正中 (${current}/${total})`, pct);
+            if (current >= total) {
+                setTimeout(hideUnifiedProgress, 1000);
+            }
+        }
 
         function switchMode(mode) {
             if(isProcessing) {
@@ -579,6 +683,21 @@
         }
 
         // Eel Calls
+        async function addFolder() {
+            if(isProcessing) return;
+            let paths = await eel.add_folder_dialog()();
+            if(paths && paths.length > 0) {
+                document.getElementById("placeholderText").style.display = "none";
+                let queueBox = document.getElementById("queueList");
+                for(let p of paths) {
+                    let item = document.createElement("div");
+                    item.className = "queue-item";
+                    item.textContent = p.split(/[\\/]/).pop();
+                    queueBox.appendChild(item);
+                }
+            }
+        }
+
         async function addVideos() {
             if(isProcessing) return;
             let paths = await eel.add_videos_dialog()();
@@ -620,11 +739,13 @@
             if(isProcessing) {
                 btn.innerHTML = currentMode === 'auto' ? "▶️ 啟動全自動 AI 過濾" : "▶️ 載入戰術播放引擎";
                 btn.className = "btn btn-start";
+                document.getElementById("aiModel").disabled = false;
                 eel.request_stop()();
                 return;
             }
             
             let settings = {
+                aiModel: document.getElementById("aiModel").value,
                 confThresh: parseFloat(confSlider.value),
                 captureMode: document.getElementById("captureMode").value,
                 classes: {
@@ -634,11 +755,13 @@
                     "3": document.getElementById("cls_motorcycle").checked
                 },
                 fastMode: fastModeCb.checked,
-                skipSec: parseFloat(skipSecSlider.value)
+                skipSec: parseFloat(skipSecSlider.value),
+                singleFolder: document.getElementById("singleFolder").checked
             };
             
             btn.innerHTML = currentMode === 'auto' ? "⏹️ 停止全自動分析" : "⏹️ 關閉播放引擎";
             btn.className = "btn btn-stop";
+            document.getElementById("aiModel").disabled = true;
             isProcessing = true;
             
             document.getElementById("logBox").innerHTML = "";
@@ -664,6 +787,9 @@
             if(timecode) {
                 document.getElementById("timeDisplay").textContent = timecode;
             }
+            if(isProcessing) {
+                showUnifiedProgress("🕵️ AI 證據全自動過濾分析中", parseFloat(percent));
+            }
         }
 
         eel.expose(updatePlayState);
@@ -687,9 +813,11 @@
         eel.expose(processingFinished);
         function processingFinished() {
             isProcessing = false;
+            hideUnifiedProgress();
             let btn = document.getElementById("btnStartAuto");
             btn.innerHTML = currentMode === 'auto' ? "▶️ 啟動全自動 AI 過濾" : "▶️ 載入戰術播放引擎";
             btn.className = "btn btn-start";
+            document.getElementById("aiModel").disabled = false;
             document.getElementById("progressText").textContent = "0%";
             document.getElementById("timeline").value = 0;
             appendLog(">>> 任務結束或已手動中止", "info");

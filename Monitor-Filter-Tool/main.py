@@ -19,6 +19,7 @@ import tkinter as tk
 from tkinter import filedialog
 import av
 import traceback
+import gc
 from ultralytics import YOLO
 
 class CONFIG:
@@ -39,6 +40,7 @@ scale_info = None
 is_processing = False
 stop_requested = False
 model = None
+current_model_name = None
 list_lock = threading.Lock()
 global_live_settings = {}
 
@@ -83,6 +85,38 @@ def add_videos_dialog():
     return added_paths
 
 @eel.expose
+def add_folder_dialog():
+    global video_queue
+    root = tk.Tk()
+    root.attributes("-topmost", True)
+    root.withdraw()
+    folder_path = filedialog.askdirectory(title="選擇包含影片的資料夾 (將自動掃描所有子資料夾)")
+    root.destroy()
+    
+    if not folder_path:
+        return []
+
+    valid_extensions = {".mp4", ".avi", ".mkv", ".mov", ".h264", ".h265", ".264", ".265", ".dav", ".flv", ".ts", ".wmv",
+                        ".mp4]", ".avi]", ".mkv]", ".mov]", ".h264]", ".h265]", ".264]", ".265]", ".dav]", ".flv]", ".ts]", ".wmv]"}
+    added_paths = []
+    
+    with list_lock:
+        for root_dir, dirs, files in os.walk(folder_path):
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext in valid_extensions:
+                    full_path = os.path.join(root_dir, file)
+                    full_path = full_path.replace("\\", "/")
+                    if full_path not in video_queue:
+                        video_queue.append(full_path)
+                        added_paths.append(full_path)
+                        
+        if added_paths and len(video_queue) == len(added_paths):
+            Thread(target=load_preview_frame, args=(video_queue[0],), daemon=True).start()
+            
+    return added_paths
+
+@eel.expose
 def clear_queue():
     global real_roi_poly, video_queue
     with list_lock:
@@ -100,9 +134,93 @@ def open_capture_folder():
         eel.appendLog(f"開啟資料夾失敗: {str(e)}", "error")
 
 @eel.expose
+def batch_rename_videos(keep_old_name=True):
+    global video_queue
+    with list_lock:
+        if is_processing:
+            return {"success": False, "msg": "分析中無法重新命名"}
+        
+        new_queue = []
+        count = 0
+        total = len(video_queue)
+        
+        for idx, path in enumerate(video_queue):
+            if idx % 50 == 0:
+                eel.updateRenameProgress(idx, total)()
+                eel.sleep(0.001) # let UI update
+                
+            dir_name = os.path.dirname(path)
+            base_name = os.path.basename(path)
+            
+            # Auto-repair logic for files with trapped extensions e.g. foo_[bar.mp4] -> foo_[bar].mp4
+            if base_name.endswith("]"):
+                name_no_ext, broken_ext = os.path.splitext(base_name)
+                if broken_ext.endswith("]"):
+                    real_ext = broken_ext[:-1] # remove ]
+                    repaired_name = name_no_ext + "]" + real_ext
+                    repaired_path = os.path.join(dir_name, repaired_name)
+                    try:
+                        os.rename(path, repaired_path)
+                        new_queue.append(repaired_path)
+                        count += 1
+                        continue
+                    except Exception:
+                        pass
+            
+            dt = parse_start_time(base_name)
+            if not dt:
+                new_queue.append(path)
+                continue
+                
+            time_str = dt.strftime("%Y%m%d_%H%M%S")
+            
+            # Check if it already matches target format to skip safely
+            if keep_old_name and base_name.startswith(f"{time_str}_["):
+                new_queue.append(path)
+                continue
+            if not keep_old_name and base_name.startswith(time_str) and "_[" not in base_name:
+                new_queue.append(path)
+                continue
+                
+            if keep_old_name:
+                name_no_ext, ext = os.path.splitext(base_name)
+                # Prevent nested brackets by removing previous timestamp prefix if it exists
+                if re.match(r'^20\d{6}_\d{6}_\[', name_no_ext) and name_no_ext.endswith("]"):
+                    name_no_ext = name_no_ext[17:-1]
+                new_name = f"{time_str}_[{name_no_ext}]{ext}"
+            else:
+                ext = os.path.splitext(base_name)[1]
+                new_name = f"{time_str}{ext}"
+                
+            new_path = os.path.join(dir_name, new_name)
+            
+            if not keep_old_name and os.path.exists(new_path) and new_path != path:
+                counter = 1
+                ext = os.path.splitext(base_name)[1]
+                while os.path.exists(new_path):
+                    new_name = f"{time_str}_{counter}{ext}"
+                    new_path = os.path.join(dir_name, new_name)
+                    counter += 1
+
+            try:
+                os.rename(path, new_path)
+                new_queue.append(new_path)
+                count += 1
+            except Exception as e:
+                print(f"Rename failed for {path}: {e}")
+                new_queue.append(path)
+            else:
+                new_queue.append(path)
+                
+        eel.updateRenameProgress(total, total)()
+        video_queue = new_queue
+        return {"success": True, "count": count, "new_paths": new_queue}
+
+@eel.expose
 def set_roi_points(pts):
-    global roi_points
+    global roi_points, real_roi_poly
     roi_points = pts
+    real_roi_poly = get_real_roi_polygon()
 
 @eel.expose
 def request_stop():
@@ -256,15 +374,24 @@ def get_real_roi_polygon():
     return np.array(real_pts, dtype=np.int32)
 
 def batch_processing_worker(settings):
-    global is_processing, model
+    global is_processing, model, current_model_name
     try:
-        if model is None:
-            eel.updateStatus("狀態: 正在載入 YOLO 大腦...", "ok")
-            model = YOLO("yolov8n.pt")  
+        model_name = settings.get("aiModel", "yolov8n.pt")
+        if model is None or globals().get('current_model_name') != model_name:
+            eel.updateStatus(f"狀態: 正在載入 {model_name}大腦...", "ok")
+            model = YOLO(model_name)
+            globals()['current_model_name'] = model_name
 
         with list_lock:
             q = list(video_queue)
         total_v = len(q)
+
+        single_folder = settings.get("singleFolder", False)
+        batch_output_dir = None
+        if single_folder:
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            batch_output_dir = os.path.join(CONFIG.CAPTURES_DIR, f"Batch_{timestamp_str}")
+            os.makedirs(batch_output_dir, exist_ok=True)
 
         for idx, video_path in enumerate(q):
             if stop_requested:
@@ -272,7 +399,8 @@ def batch_processing_worker(settings):
             v_name = os.path.basename(video_path)
             eel.updateStatus(f"狀態: 正在分析 ({idx + 1}/{total_v}) {v_name}", "ok")
             eel.appendLog(f"開始載入影片: {v_name}", "info")
-            process_single_video(video_path, v_name, settings)
+            process_single_video(video_path, v_name, settings, batch_output_dir)
+            gc.collect()
 
         if stop_requested:
             eel.updateStatus("狀態: 已由使用者手動中止", "danger")
@@ -292,12 +420,46 @@ def batch_processing_worker(settings):
         eel.processingFinished()
 
 def parse_start_time(filename):
-    match = re.search(r'(\d{14})', filename)
-    if match:
+    # Dashcam/Special Format: P260625_015237_015747 (YYMMDD_StartTime_EndTime)
+    match_yymmdd = re.search(r'[A-Za-z]?(\d{2})(\d{4})_(\d{6})_\d{6}', filename)
+    if match_yymmdd:
         try:
-            return datetime.strptime(match.group(1), "%Y%m%d%H%M%S")
-        except Exception:
-            pass
+            yy = int(match_yymmdd.group(1))
+            year = 2000 + yy if yy < 50 else 1900 + yy
+            return datetime.strptime(f"{year}{match_yymmdd.group(2)}_{match_yymmdd.group(3)}", "%Y%m%d_%H%M%S")
+        except: pass
+
+    match_15 = re.search(r'(20\d{6}_\d{6})', filename)
+    if match_15:
+        try: return datetime.strptime(match_15.group(1), "%Y%m%d_%H%M%S")
+        except: pass
+        
+    match_14 = re.search(r'(20\d{12})', filename)
+    if match_14:
+        try: return datetime.strptime(match_14.group(1), "%Y%m%d%H%M%S")
+        except: pass
+
+    match_roc_us = re.search(r'([01]\d{6}_\d{6})', filename)
+    if match_roc_us:
+        try:
+            roc_str = match_roc_us.group(1)
+            year = int(roc_str[:3]) + 1911
+            return datetime.strptime(f"{year}{roc_str[3:]}", "%Y%m%d_%H%M%S")
+        except: pass
+
+    match_roc13 = re.search(r'([01]\d{12})', filename)
+    if match_roc13:
+        try:
+            roc_str = match_roc13.group(1)
+            year = int(roc_str[:3]) + 1911
+            return datetime.strptime(f"{year}{roc_str[3:]}", "%Y%m%d%H%M%S")
+        except: pass
+
+    match_unix = re.search(r'(1\d{9}|2[0-4]\d{8})', filename)
+    if match_unix:
+        try: return datetime.fromtimestamp(int(match_unix.group(1)))
+        except: pass
+
     return None
 
 def format_timecode(milliseconds, start_time=None):
@@ -314,12 +476,16 @@ def format_timecode(milliseconds, start_time=None):
     mins = mins % 60
     return f"{hrs:02d}:{mins:02d}:{secs:02d}.{ms // 100:01d}"
 
-def process_single_video(video_path, video_name, settings):
+def process_single_video(video_path, video_name, settings, batch_output_dir=None):
     global stop_requested, real_roi_poly
     
-    clean_v_name = "".join([c for c in video_name if c.isalnum() or c in (".", "_", "-")]).rstrip()
-    output_dir = os.path.join(CONFIG.CAPTURES_DIR, clean_v_name)
-    os.makedirs(output_dir, exist_ok=True)
+    clean_v_name = os.path.splitext(video_name)[0]
+    clean_v_name = "".join([c for c in clean_v_name if c.isalnum() or c in (".", "_", "-", "[", "]")]).rstrip()
+    if batch_output_dir:
+        output_dir = batch_output_dir
+    else:
+        output_dir = os.path.join(CONFIG.CAPTURES_DIR, clean_v_name)
+        os.makedirs(output_dir, exist_ok=True)
     real_roi_poly = get_real_roi_polygon()
     start_time_dt = parse_start_time(video_name)
 
@@ -469,7 +635,7 @@ def process_single_video(video_path, video_name, settings):
                         cv2.polylines(annotated, [real_roi_poly], True, (0, 255, 0), 2)
                     
                     if req_capture:
-                        save_legal_screenshot(annotated, output_dir, time_code_str, ["Manual Capture"])
+                        save_legal_screenshot(annotated, output_dir, time_code_str, ["Manual Capture"], clean_v_name)
                         eel.appendLog(f"[{time_code_str}] 📸 手動快門擷取成功", "success")
 
                     # Draw OSD Timecode
@@ -525,7 +691,7 @@ def process_single_video(video_path, video_name, settings):
                     last_ui_update = now
 
                 # ---------------- YOLO Detection ----------------
-                results = model.track(frame, persist=True, tracker="bytetrack.yaml", verbose=False)[0]
+                results = model.track(frame, persist=True, tracker="bytetrack.yaml", verbose=False, conf=conf_thresh)[0]
                 boxes = results.boxes
                 annotated_frame = frame.copy()
                 valid_targets = []
@@ -590,14 +756,14 @@ def process_single_video(video_path, video_name, settings):
                         current_av_frame = None
                         continue
                     else:
-                        _run_grace_period_gc(milliseconds, track_states, capture_mode, output_dir)
+                        _run_grace_period_gc(milliseconds, track_states, capture_mode, output_dir, clean_v_name)
                         target_frame_idx += static_skip_step
                         continue
                 else:
                     if not motion_detected and target_frame_idx >= dynamic_lock_until:
                         is_dynamic_mode = False
                         target_frame_idx += static_skip_step
-                        _run_grace_period_gc(milliseconds, track_states, capture_mode, output_dir)
+                        _run_grace_period_gc(milliseconds, track_states, capture_mode, output_dir, clean_v_name)
                         continue
 
                 # ---------------- Track States Management ----------------
@@ -648,10 +814,10 @@ def process_single_video(video_path, video_name, settings):
                                 'last_box_size': (w, h)
                             }
                             if capture_mode in ["雙格蒐證模式 (起點+最清晰)", "事件起訖模式"]:
-                                save_legal_screenshot(annotated_frame, output_dir, time_code_str, [f"{summary_str}(Entry)"])
+                                save_legal_screenshot(annotated_frame, output_dir, time_code_str, [f"ID:{tid} {cls_name}(Entry)"], clean_v_name)
                                 eel.appendLog(f"[{time_code_str}] 擷取 {summary_str}(Entry)", "success")
                             elif capture_mode == "持續追蹤模式 (預設)":
-                                save_legal_screenshot(annotated_frame, output_dir, time_code_str, [f"{summary_str}(Track-Entry)"])
+                                save_legal_screenshot(annotated_frame, output_dir, time_code_str, [f"{summary_str}(Track-Entry)"], clean_v_name)
                                 eel.appendLog(f"[{time_code_str}] 擷取 {summary_str}(Track-Entry)", "success")
                     else:
                         state = track_states[tid]
@@ -671,7 +837,7 @@ def process_single_video(video_path, video_name, settings):
                         state = track_states[tid]
                         if (milliseconds - state['last_continuous_capture_msec']) >= 3000:
                             state['last_continuous_capture_msec'] = milliseconds
-                            save_legal_screenshot(annotated_frame, output_dir, time_code_str, [f"{summary_str}(Track)"])
+                            save_legal_screenshot(annotated_frame, output_dir, time_code_str, [f"{summary_str}(Track)"], clean_v_name)
                             eel.appendLog(f"[{time_code_str}] 擷取 {summary_str}(Track)", "success")
 
                 if engine_mode == 'auto' and is_dynamic_mode:
@@ -691,12 +857,12 @@ def process_single_video(video_path, video_name, settings):
                 if not fast_mode:
                     push_frame_to_ui(annotated_frame)
                     
-                _run_grace_period_gc(milliseconds, track_states, capture_mode, output_dir)
+                _run_grace_period_gc(milliseconds, track_states, capture_mode, output_dir, clean_v_name)
 
                 target_frame_idx += 1 
 
         if engine_mode == 'auto':
-            _flush_all_track_states(track_states, capture_mode, output_dir)
+            _flush_all_track_states(track_states, capture_mode, output_dir, clean_v_name)
         container.close()
 
     except Exception as e:
@@ -729,7 +895,7 @@ def push_frame_to_ui(frame):
     info_obj = {"scale": scale, "pad_x": pad_x, "pad_y": pad_y, "canvas_w": canvas_w, "canvas_h": canvas_h}
     eel.setPreviewImage(b64_str, info_obj)()
 
-def _run_grace_period_gc(curr_msec, track_states, capture_mode, output_dir):
+def _run_grace_period_gc(curr_msec, track_states, capture_mode, output_dir, prefix_name):
     expired_ids = []
     for tid, state in track_states.items():
         if (curr_msec - state['last_seen_msec']) > 1500:
@@ -738,27 +904,27 @@ def _run_grace_period_gc(curr_msec, track_states, capture_mode, output_dir):
         state = track_states[tid]
         if capture_mode in ["雙格蒐證模式 (起點+最清晰)", "單次最清晰模式 (推薦)"]:
             if state['best_frame'] is not None:
-                save_legal_screenshot(state['best_frame'], output_dir, state['best_timecode'], state['best_summary'])
+                save_legal_screenshot(state['best_frame'], output_dir, state['best_timecode'], state['best_summary'], prefix_name)
                 eel.appendLog(f"[{state['best_timecode']}] 擷取 {state['best_summary'][0]}", "success")
         elif capture_mode == "事件起訖模式":
             if state['last_frame'] is not None:
-                save_legal_screenshot(state['last_frame'], output_dir, state['last_timecode'], [f"ID:{tid} {state['class_name']}(Exit)"])
+                save_legal_screenshot(state['last_frame'], output_dir, state['last_timecode'], [f"ID:{tid} {state['class_name']}(Exit)"], prefix_name)
                 eel.appendLog(f"[{state['last_timecode']}] 擷取 ID:{tid} {state['class_name']}(Exit)", "success")
         del track_states[tid]
 
-def _flush_all_track_states(track_states, capture_mode, output_dir):
+def _flush_all_track_states(track_states, capture_mode, output_dir, prefix_name):
     for tid, state in track_states.items():
         if capture_mode in ["雙格蒐證模式 (起點+最清晰)", "單次最清晰模式 (推薦)"]:
             if state['best_frame'] is not None:
-                save_legal_screenshot(state['best_frame'], output_dir, state['best_timecode'], state['best_summary'])
+                save_legal_screenshot(state['best_frame'], output_dir, state['best_timecode'], state['best_summary'], prefix_name)
                 eel.appendLog(f"[{state['best_timecode']}] 擷取 {state['best_summary'][0]}", "success")
         elif capture_mode == "事件起訖模式":
             if state['last_frame'] is not None:
-                save_legal_screenshot(state['last_frame'], output_dir, state['last_timecode'], [f"ID:{tid} {state['class_name']}(Exit)"])
+                save_legal_screenshot(state['last_frame'], output_dir, state['last_timecode'], [f"ID:{tid} {state['class_name']}(Exit)"], prefix_name)
                 eel.appendLog(f"[{state['last_timecode']}] 擷取 ID:{tid} {state['class_name']}(Exit)", "success")
     track_states.clear()
 
-def save_legal_screenshot(frame, output_dir, time_code, objects_list):
+def save_legal_screenshot(frame, output_dir, time_code, objects_list, prefix_name="evidence"):
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(frame_rgb)
     draw = ImageDraw.Draw(pil_img)
@@ -803,9 +969,16 @@ def save_legal_screenshot(frame, output_dir, time_code, objects_list):
     pil_img = pil_img.convert("RGBA")
     pil_img = Image.alpha_composite(pil_img, overlay)
     pil_img = pil_img.convert("RGB")
-
-    safe_time_str = time_code.replace("/", "-").replace(":", "-").replace(".", "-")
-    filename = f"evidence_{safe_time_str}.jpg"
+    if " " in time_code:
+        parts = time_code.split(".")
+        main_time = parts[0]
+        safe_time_str = main_time.replace("/", "").replace(":", "").replace(" ", "_")
+        if len(parts) > 1:
+            safe_time_str += f"_{parts[1]}"
+    else:
+        safe_time_str = time_code.replace(":", "").replace(".", "_")
+        
+    filename = f"{prefix_name}_{safe_time_str}.jpg"
     final_path = os.path.join(output_dir, filename)
 
     final_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
