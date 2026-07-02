@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>體感水果忍者 (Fruit Ninja Motion Web)</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;700&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe Hands & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body { font-family: 'Outfit', sans-serif; background-color: #050505; overflow: hidden; margin: 0; padding: 0; color: white; }
+        #canvas-container { position: relative; width: 100vw; height: 100vh; }
+        
+        /* 隱藏真實相機畫面，我們自己畫在 Canvas 上並水平翻轉 */
+        .input_video { display: none; } 
+        .output_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+        
+        /* UI 覆蓋層 */
+        .ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; display: flex; flex-direction: column; justify-content: space-between; padding: 2rem; }
+        .text-neon-blue { text-shadow: 0 0 10px #38bdf8, 0 0 20px #38bdf8; color: #e0f2fe; }
+        .text-neon-red { text-shadow: 0 0 10px #ef4444, 0 0 20px #ef4444; color: #fee2e2; }
+        .text-neon-pink { text-shadow: 0 0 10px #ec4899, 0 0 20px #ec4899; color: #fce7f3; }
+        
+        #overlay-screens { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
+        .screen { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(5, 5, 5, 0.7); backdrop-filter: blur(5px); transition: opacity 0.5s; }
+        .hidden { opacity: 0; pointer-events: none; display: none !important; }
+
+        .btn {
+            background: rgba(15, 23, 42, 0.8); border: 2px solid #38bdf8; color: #e0f2fe;
+            padding: 1rem 3rem; font-size: 1.5rem; text-transform: uppercase; letter-spacing: 2px;
+            cursor: pointer; border-radius: 9999px; transition: all 0.2s ease; pointer-events: auto;
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.4); margin: 1rem;
+        }
+        .btn:hover { background: #38bdf8; color: #0f172a; box-shadow: 0 0 30px #38bdf8; transform: scale(1.05); }
+
+        /* 爆裂閃爍特效與震動 */
+        @keyframes flash-red {
+            0% { background-color: rgba(239, 68, 68, 0.8); }
+            100% { background-color: transparent; }
+        }
+        .flash-effect { animation: flash-red 0.3s ease-out; }
+
+        @keyframes shake {
+            0% { transform: translate(1px, 1px) rotate(0deg); }
+            10% { transform: translate(-1px, -2px) rotate(-1deg); }
+            20% { transform: translate(-3px, 0px) rotate(1deg); }
+            30% { transform: translate(3px, 2px) rotate(0deg); }
+            40% { transform: translate(1px, -1px) rotate(1deg); }
+            50% { transform: translate(-1px, 2px) rotate(-1deg); }
+            60% { transform: translate(-3px, 1px) rotate(0deg); }
+            70% { transform: translate(3px, 1px) rotate(-1deg); }
+            80% { transform: translate(-1px, -1px) rotate(1deg); }
+            90% { transform: translate(1px, 2px) rotate(0deg); }
+            100% { transform: translate(1px, -2px) rotate(-1deg); }
+        }
+        .shake-effect { animation: shake 0.5s; }
+    </style>
+</head>
+<body>
+
+<div id="canvas-container">
+    <video class="input_video" autoplay playsinline></video>
+    <!-- 主要繪圖區 -->
+    <canvas class="output_canvas" id="gameCanvas"></canvas>
+    <!-- 遊戲UI區 (分數、血量等) -->
+    <div id="hud" class="ui-layer hidden">
+        <div class="flex justify-between items-start w-full">
+            <div id="scoreContainer" class="text-4xl font-bold text-neon-blue">SCORE: <span id="scoreDisplay">0</span></div>
+            <div id="timerContainer" class="text-6xl font-bold text-neon-pink hidden tracking-wider">01:00</div>
+            <div id="livesDisplay" class="text-4xl font-bold text-neon-red tracking-widest">❤️❤️❤️</div>
+        </div>
+        <div id="comboDisplay" class="text-5xl font-bold text-neon-pink text-center mt-20 opacity-0 transition-opacity">COMBO x3!</div>
+    </div>
+</div>
+
+<div id="overlay-screens">
+    <!-- 載入畫面 -->
+    <div id="loadingScreen" class="screen">
+        <div class="animate-spin rounded-full h-32 w-32 border-t-4 border-b-4 border-[#38bdf8] mb-4"></div>
+        <h1 class="text-4xl font-bold text-neon-blue">啟動神經連結中...</h1>
+        <p class="mt-4 text-gray-400">正在下載 MediaPipe 模型...</p>
+    </div>
+
+    <!-- 授權與開始畫面 (解決瀏覽器音效自動播放政策) -->
+    <div id="startScreen" class="screen hidden" style="pointer-events: auto;">
+        <h1 class="text-5xl font-bold text-neon-pink mb-12">神經連結已就緒</h1>
+        <button class="btn" id="btnInit">點擊這裡以開啟音效與相機</button>
+    </div>
+
+    <!-- 主選單 (取消按鈕，改用語音/體感) -->
+    <div id="menuScreen" class="screen hidden">
+        <h1 class="text-[5rem] font-bold text-neon-pink mb-4 text-center">體感水果忍者</h1>
+        <p class="text-2xl text-neon-blue mb-8 font-bold">揮舞手臂，切開下方的水果來選擇模式！</p>
+    </div>
+
+    <!-- 遊戲結束畫面 -->
+    <div id="gameOverScreen" class="screen hidden">
+        <h1 id="gameOverTitle" class="text-[5rem] font-bold text-neon-red mb-4">系統過載</h1>
+        <p id="gameOverSub" class="text-4xl text-neon-blue mb-8 font-bold">最終得分: <span id="finalScore">0</span></p>
+        <p class="text-2xl text-gray-300 mt-10">切開下方的水果重新啟動</p>
+    </div>
+</div>
+
+<!-- 隱藏的 YouTube 播放器容器 (部署到 GitHub Pages 後完美運作) -->
+<div id="ytplayer"></div>
+
+<!-- 引入 YouTube Iframe API -->
+<script src="https://www.youtube.com/iframe_api"></script>
+
+<script>
+// ==========================================
+// ⚙️ 靜態配置 (CONFIG)
+// ==========================================
+const CONFIG = {
+    DRY_RUN: false,
+    PHYSICS: {
+        GRAVITY: 0.15,
+        FRUIT_MIN_SPEED: -12,
+        FRUIT_MAX_SPEED: -18,
+    },
+    GAME: {
+        MAX_LIVES: 3,
+        SPAWN_RATE: 1500,
+        MIN_SPAWN_RATE: 600,
+        BANANA_PROBABILITY: 0.08, 
+        BANANA_DURATION: 300, 
+        PARTY_TIME: 60,
+        // YouTube 無版權音樂 (NCS 熱血神曲: Tobu - Hope)
+        // 來源: NoCopyrightSounds 頻道
+        BGM_YOUTUBE_ID: 'EP625xQIGzs'
+    },
+    TRACKING: {
+        BLADE_REACH: 3.5, // 手腕到掌心連線的延伸倍率，適應大螢幕
+        BLADE_WIDTH: 8,
+        HIT_TOLERANCE: 1.2, // 判定區域放大倍率 (容錯)
+    }
+};
+
+// ==========================================
+// 🎵 音效合成系統 (Web Audio API)
+// ==========================================
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+const SoundSys = {
+    playSlash: () => {
+        try {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+            gain.gain.setValueAtTime(1.5, audioCtx.currentTime); // 放大音量以穿透 YouTube BGM
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        } catch(e) { console.warn("Audio Error", e); }
+    },
+    playBomb: () => {
+        try {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(100, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(20, audioCtx.currentTime + 0.5);
+            gain.gain.setValueAtTime(2.0, audioCtx.currentTime); // 放大音量
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.5);
+        } catch(e) { console.warn("Audio Error", e); }
+    },
+    playMenuHit: () => {
+        try {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(1200, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(400, audioCtx.currentTime + 0.3);
+            gain.gain.setValueAtTime(1.5, audioCtx.currentTime); // 放大音量
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        } catch(e) { console.warn("Audio Error", e); }
+    }
+};
+
+// ==========================================
+// 🎶 YouTube 無版權神曲播放系統 (YouTube Iframe API)
+// 完美整合 GitHub Pages (HTTPS) 環境
+// ==========================================
+let ytPlayer;
+function onYouTubeIframeAPIReady() {
+    ytPlayer = new YT.Player('ytplayer', {
+        height: '0',
+        width: '0',
+        videoId: CONFIG.GAME.BGM_YOUTUBE_ID,
+        playerVars: {
+            'autoplay': 0, // 手動控制
+            'controls': 0,
+            'loop': 1,     // 循環播放
+            'playlist': CONFIG.GAME.BGM_YOUTUBE_ID // loop 需要指定 playlist
+        }
+    });
+}
+
+const BGMSystem = {
+    start() {
+        if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
+            ytPlayer.setVolume(35); // 音量 35%，避免蓋過切水果的清脆音效
+            ytPlayer.playVideo();
+        }
+    },
+    
+    stop() {
+        if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') {
+            ytPlayer.pauseVideo();
+        }
+    }
+};
+
+// ==========================================
+// 🍎 遊戲物件定義與 Emoji Sprite Cache (效能終極殺器)
+// ==========================================
+const SpriteCache = {};
+function buildSpriteCache() {
+    const emojis = ['🍎', '🍉', '🥥', '🥝', '🍑', '🍓', '🍊', '🍌', '💣'];
+    const radius = 90; // 再放大 1.5 倍
+    emojis.forEach(emoji => {
+        SpriteCache[emoji] = {
+            full: createEmojiCanvas(emoji, radius, 'full'),
+            left: createEmojiCanvas(emoji, radius, 'left'),
+            right: createEmojiCanvas(emoji, radius, 'right')
+        };
+    });
+}
+
+function createEmojiCanvas(emoji, radius, type) {
+    let canvas = document.createElement('canvas');
+    canvas.width = radius * 2;
+    canvas.height = radius * 2;
+    let ctx = canvas.getContext('2d');
+    
+    ctx.translate(radius, radius);
+    if (type === 'left') {
+        ctx.beginPath();
+        ctx.rect(-radius, -radius, radius, radius * 2);
+        ctx.clip();
+    } else if (type === 'right') {
+        ctx.beginPath();
+        ctx.rect(0, -radius, radius, radius * 2);
+        ctx.clip();
+    }
+    
+    ctx.font = `${radius * 1.8}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emoji, 0, 0);
+    
+    // 半邊水果加上切面點綴
+    if (type !== 'full') {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 4, radius*0.7, 0, 0, Math.PI*2);
+        ctx.fill();
+    }
+    return canvas;
+}
+
+class Fruit {
+    constructor(canvasWidth, canvasHeight, forceType = null, sideSpawn = false, noBombs = false) {
+        if (sideSpawn) {
+            // 從兩邊拋出 (Frenzy)
+            let isLeft = Math.random() > 0.5;
+            this.x = isLeft ? 10 : canvasWidth - 10;
+            this.y = canvasHeight - 100;
+            this.vx = isLeft ? (Math.random() * 10 + 5) : -(Math.random() * 10 + 5);
+            this.vy = -(Math.random() * 10 + 10);
+        } else {
+            // 一般生成
+            this.x = Math.random() * (canvasWidth * 0.8) + (canvasWidth * 0.1);
+            this.y = canvasHeight + 50;
+            this.vx = (Math.random() - 0.5) * 6;
+            this.vy = Math.random() * (CONFIG.PHYSICS.FRUIT_MAX_SPEED - CONFIG.PHYSICS.FRUIT_MIN_SPEED) + CONFIG.PHYSICS.FRUIT_MIN_SPEED;
+        }
+        
+        this.radius = 90; // 再放大 1.5 倍
+        
+        if (forceType) {
+            this.type = forceType;
+        } else {
+            let r = Math.random();
+            if (r < CONFIG.GAME.BANANA_PROBABILITY) {
+                let bt = Math.random();
+                if (bt < 0.5) this.type = 'banana_double';
+                else this.type = 'banana_frenzy';
+            } else if (r > 0.85 && !noBombs) {
+                this.type = 'bomb';
+            } else {
+                this.type = 'fruit';
+            }
+        }
+
+        // 根據類型決定顏色與 Emoji
+        if (this.type === 'bomb') {
+            this.color = '#000000';
+            this.emoji = '💣';
+        } else if (this.type === 'banana_double') {
+            this.color = '#fbbf24';
+            this.emoji = '🍌';
+        } else if (this.type === 'banana_frenzy') {
+            this.color = '#a855f7';
+            this.emoji = '🍌';
+        } else {
+            this.color = ['#ef4444', '#facc15', '#4ade80'][Math.floor(Math.random()*3)];
+            const fruits = ['🍎', '🍉', '🥥', '🥝', '🍑', '🍓', '🍊'];
+            this.emoji = fruits[Math.floor(Math.random() * fruits.length)];
+        }
+        
+        this.sliced = false;
+        this.rotation = 0;
+        this.rotSpeed = (Math.random() - 0.5) * 0.2;
+    }
+
+    update() {
+        this.x += this.vx;
+        this.vy += CONFIG.PHYSICS.GRAVITY;
+        this.y += this.vy;
+        this.rotation += this.rotSpeed;
+    }
+
+    draw(ctx) {
+        if(this.sliced) return; // 切開後改畫粒子，本體消失
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+        
+        // 【效能優化】移除 shadowBlur，改用簡單半透明圓形底色，提升 FPS
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius * 0.8, 0, Math.PI * 2);
+        if (this.type === 'bomb') {
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.5)';
+            ctx.fill();
+        } else if (this.type.startsWith('banana_')) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.fill();
+        }
+
+        // 讀取已經渲染好的 Sprite (速度提升百倍！)
+        let img = SpriteCache[this.emoji]?.full;
+        if (img) {
+            ctx.drawImage(img, -this.radius, -this.radius, this.radius*2, this.radius*2);
+        }
+
+        ctx.restore();
+    }
+}
+
+class HalfFruit {
+    constructor(x, y, emoji, type, vx, vy, color, isLeft) {
+        this.x = x; this.y = y;
+        this.emoji = emoji;
+        this.type = type;
+        this.color = color;
+        this.isLeft = isLeft;
+        // 切開後向外飛散
+        this.vx = vx + (isLeft ? -5 : 5);
+        this.vy = vy - 4; // 稍微往上跳
+        this.rotation = 0;
+        this.rotSpeed = (Math.random() * 0.2 + 0.1) * (isLeft ? -1 : 1);
+        this.radius = 90; // 配合再放大 1.5 倍
+    }
+    update() {
+        this.x += this.vx;
+        this.vy += CONFIG.PHYSICS.GRAVITY;
+        this.y += this.vy;
+        this.rotation += this.rotSpeed;
+    }
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+        
+        // 讀取預先裁切好的左右半邊 Sprite (免去主迴圈 clip() 的高昂代價！)
+        let img = this.isLeft ? SpriteCache[this.emoji]?.left : SpriteCache[this.emoji]?.right;
+        if (img) {
+            ctx.drawImage(img, -this.radius, -this.radius, this.radius*2, this.radius*2);
+        }
+
+        ctx.restore();
+    }
+}
+
+class Particle {
+    constructor(x, y, color) {
+        this.x = x; this.y = y;
+        this.vx = (Math.random() - 0.5) * 15;
+        this.vy = (Math.random() - 0.5) * 15;
+        this.life = 1.0;
+        this.color = color;
+    }
+    update() {
+        this.x += this.vx;
+        this.vy += CONFIG.PHYSICS.GRAVITY;
+        this.y += this.vy;
+        this.life -= 0.03; // 加快消失，減輕效能負擔
+    }
+    draw(ctx) {
+        if(this.life <= 0) return;
+        ctx.globalAlpha = Math.max(0, this.life);
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 8, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+    }
+}
+
+// ==========================================
+// 🎮 遊戲核心引擎
+// ==========================================
+const GameEngine = {
+    state: 'LOADING', // LOADING, MENU, PLAYING, GAMEOVER
+    mode: 'CLASSIC', // 'CLASSIC' or 'PARTY'
+    score: 0,
+    lives: CONFIG.GAME.MAX_LIVES,
+    timeLeft: 0, // 用於 PARTY 模式
+    lastSecondTime: 0,
+    fruits: [],
+    halfFruits: [], // 切半的水果
+    particles: [],
+    bladePoints: [[], [], [], []], // 支援 4 隻手 (雙人)
+    uiButtons: [], // 體感選單按鈕
+    lastSpawnTime: 0,
+    spawnRate: CONFIG.GAME.SPAWN_RATE,
+    timers: { freeze: 0, double: 0, frenzy: 0 },
+    canvas: null,
+    ctx: null,
+    
+    init() {
+        this.canvas = document.getElementById('gameCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+        
+        buildSpriteCache(); // 預先渲染所有 Emoji Sprites
+    },
+    
+    resize() {
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+        this.setupUIButtons();
+    },
+
+    setupUIButtons() {
+        let cw = this.canvas.width;
+        let ch = this.canvas.height;
+        let r = 120; // 超大按鈕
+        
+        if (this.state === 'MENU') {
+            this.uiButtons = [
+                { id: 'CLASSIC', emoji: '🍎', text: '單人經典', x: cw/3, y: ch*0.6, r: r, color: '#ef4444' },
+                { id: 'PARTY', emoji: '🍉', text: '雙人派對', x: cw*2/3, y: ch*0.6, r: r, color: '#ec4899' }
+            ];
+        } else if (this.state === 'GAMEOVER') {
+            this.uiButtons = [
+                { id: 'MENU', emoji: '🏠', text: '回主選單', x: cw/2, y: ch*0.8, r: r, color: '#38bdf8' }
+            ];
+        }
+    },
+
+    setMenuState() {
+        this.state = 'MENU';
+        this.setupUIButtons();
+        document.getElementById('startScreen').classList.add('hidden');
+        document.getElementById('loadingScreen').classList.add('hidden');
+        document.getElementById('menuScreen').classList.remove('hidden');
+        document.getElementById('gameOverScreen').classList.add('hidden');
+        document.getElementById('hud').classList.add('hidden');
+    },
+
+    startGame(mode) {
+        if(audioCtx.state === 'suspended') audioCtx.resume();
+        BGMSystem.start(); // 啟動背景音樂
+        this.state = 'PLAYING';
+        this.mode = mode;
+        this.score = 0;
+        this.lives = CONFIG.GAME.MAX_LIVES;
+        this.timeLeft = CONFIG.GAME.PARTY_TIME;
+        this.lastSecondTime = Date.now();
+        
+        this.fruits = [];
+        this.halfFruits = [];
+        this.particles = [];
+        this.bladePoints = [[], [], [], []]; // 4 隻手清空
+        this.spawnRate = CONFIG.GAME.SPAWN_RATE;
+        this.timers = { freeze: 0, double: 0, frenzy: 0 };
+        this.uiButtons = []; // 遊戲開始，清空 UI 按鈕
+        
+        document.getElementById('menuScreen').classList.add('hidden');
+        document.getElementById('gameOverScreen').classList.add('hidden');
+        document.getElementById('hud').classList.remove('hidden');
+
+        // 依據模式切換 HUD
+        if (this.mode === 'CLASSIC') {
+            document.getElementById('scoreContainer').classList.remove('hidden');
+            document.getElementById('livesDisplay').classList.remove('hidden');
+            document.getElementById('timerContainer').classList.add('hidden');
+        } else if (this.mode === 'PARTY') {
+            document.getElementById('scoreContainer').classList.add('hidden');
+            document.getElementById('livesDisplay').classList.add('hidden');
+            document.getElementById('timerContainer').classList.remove('hidden');
+        }
+        
+        this.updateHUD();
+    },
+
+    endGame() {
+        this.state = 'GAMEOVER';
+        BGMSystem.stop(); // 停止背景音樂
+        this.setupUIButtons();
+        
+        document.getElementById('hud').classList.add('hidden');
+        document.getElementById('gameOverScreen').classList.remove('hidden');
+        
+        let title = document.getElementById('gameOverTitle');
+        let sub = document.getElementById('gameOverSub');
+        
+        if (this.mode === 'CLASSIC') {
+            title.innerText = "系統過載";
+            title.className = "text-[5rem] font-bold text-neon-red mb-4";
+            sub.innerHTML = `最終得分: <span class="text-neon-blue font-bold">${this.score}</span>`;
+            SoundSys.playBomb(); 
+        } else {
+            // 派對模式友善結語
+            title.innerText = "時間到！";
+            title.className = "text-[5rem] font-bold text-neon-pink mb-4";
+            sub.innerHTML = `切得好開心！大家都很棒！`;
+            SoundSys.playMenuHit();
+        }
+    },
+
+    updateHUD() {
+        if (this.mode === 'CLASSIC') {
+            document.getElementById('scoreDisplay').innerText = this.score;
+            let heartStr = "";
+            for(let i=0; i<this.lives; i++) heartStr += "❤️";
+            document.getElementById('livesDisplay').innerText = heartStr;
+        } else if (this.mode === 'PARTY') {
+            let m = Math.floor(this.timeLeft / 60).toString().padStart(2, '0');
+            let s = (this.timeLeft % 60).toString().padStart(2, '0');
+            document.getElementById('timerContainer').innerText = `${m}:${s}`;
+        }
+    },
+
+    spawnFruit() {
+        if (this.timers.frenzy > 0) {
+            // 狂熱模式：從兩側隨機噴發，沒有炸彈
+            this.fruits.push(new Fruit(this.canvas.width, this.canvas.height, 'fruit', true));
+        } else {
+            // 根據模式決定是否禁用炸彈
+            let noBombs = (this.mode === 'PARTY');
+            this.fruits.push(new Fruit(this.canvas.width, this.canvas.height, null, false, noBombs));
+            // 隨時間縮短生成間隔 (難度增加)
+            if(this.spawnRate > CONFIG.GAME.MIN_SPAWN_RATE) {
+                this.spawnRate -= 10;
+            }
+        }
+    },
+
+    createSplatter(x, y, color) {
+        // 【效能優化】將粒子數量減少為 8 個，避免過度耗能
+        for(let i=0; i<8; i++) {
+            this.particles.push(new Particle(x, y, color));
+        }
+    },
+
+    // 距離點到線段的最短距離
+    pDistance(x, y, x1, y1, x2, y2) {
+        let A = x - x1; let B = y - y1;
+        let C = x2 - x1; let D = y2 - y1;
+        let dot = A * C + B * D;
+        let len_sq = C * C + D * D;
+        let param = -1;
+        if (len_sq != 0) param = dot / len_sq;
+        let xx, yy;
+        if (param < 0) { xx = x1; yy = y1; }
+        else if (param > 1) { xx = x2; yy = y2; }
+        else { xx = x1 + param * C; yy = y1 + param * D; }
+        let dx = x - xx; let dy = y - yy;
+        return Math.sqrt(dx * dx + dy * dy);
+    },
+
+    processSlash(bladeStartX, bladeStartY, bladeEndX, bladeEndY) {
+        // 處理體感選單按鈕的切割
+        if (this.state === 'MENU' || this.state === 'GAMEOVER') {
+            for (let i = 0; i < this.uiButtons.length; i++) {
+                let btn = this.uiButtons[i];
+                let dist = this.pDistance(btn.x, btn.y, bladeStartX, bladeStartY, bladeEndX, bladeEndY);
+                if (dist < btn.r * 1.5) { // 加大容錯
+                    SoundSys.playMenuHit();
+                    this.createSplatter(btn.x, btn.y, btn.color);
+                    
+                    let targetMode = btn.id;
+                    this.uiButtons.splice(i, 1); // 隱藏按鈕避免連切
+                    
+                    // 延遲一點點開始遊戲，讓玩家看到粒子特效
+                    setTimeout(() => {
+                        if (targetMode === 'MENU') {
+                            this.setMenuState();
+                        } else {
+                            this.startGame(targetMode);
+                        }
+                    }, 500);
+                    return; // 一次只切一顆
+                }
+            }
+            return;
+        }
+        
+        // 處理遊戲中的水果切割
+        if(this.state !== 'PLAYING') return;
+        
+        let comboCount = 0;
+
+        for (let i = this.fruits.length - 1; i >= 0; i--) {
+            let f = this.fruits[i];
+            if (f.sliced) continue;
+
+            // 計算水果中心到光刃線段的距離
+            let dist = this.pDistance(f.x, f.y, bladeStartX, bladeStartY, bladeEndX, bladeEndY);
+            
+            // 加入容錯半徑
+            if (dist < f.radius * CONFIG.TRACKING.HIT_TOLERANCE) {
+                f.sliced = true;
+                if (f.type === 'bomb') {
+                    // 切到炸彈
+                    SoundSys.playBomb();
+                    this.lives--;
+                    this.updateHUD();
+                    // 畫面閃紅與劇烈震動
+                    document.body.classList.add('flash-effect');
+                    document.body.classList.add('shake-effect');
+                    setTimeout(() => {
+                        document.body.classList.remove('flash-effect');
+                        document.body.classList.remove('shake-effect');
+                    }, 500);
+                    
+                    if (this.lives <= 0) {
+                        this.endGame();
+                        return;
+                    }
+                } else if (f.type.startsWith('banana_')) {
+                    // 切到香蕉特效
+                    SoundSys.playSlash();
+                    this.createSplatter(f.x, f.y, f.color);
+                    let type = f.type.split('_')[1];
+                    this.timers[type] = CONFIG.GAME.BANANA_DURATION;
+                    
+                    // 產生切半香蕉
+                    this.halfFruits.push(new HalfFruit(f.x, f.y, f.emoji, f.type, f.vx, f.vy, f.color, true));
+                    this.halfFruits.push(new HalfFruit(f.x, f.y, f.emoji, f.type, f.vx, f.vy, f.color, false));
+
+                    let comboHUD = document.getElementById('comboDisplay');
+                    comboHUD.innerText = type.toUpperCase() + " BANANA!";
+                    let textClass = type === 'freeze' ? 'text-neon-blue' : (type === 'double' ? 'text-neon-pink' : 'text-neon-red');
+                    comboHUD.className = "text-5xl font-bold text-center mt-20 transition-opacity " + textClass;
+                    comboHUD.style.opacity = 1;
+                    setTimeout(() => comboHUD.style.opacity = 0, 1500);
+                } else {
+                    // 切中一般水果
+                    SoundSys.playSlash();
+                    this.createSplatter(f.x, f.y, f.color);
+                    this.halfFruits.push(new HalfFruit(f.x, f.y, f.emoji, f.type, f.vx, f.vy, f.color, true));
+                    this.halfFruits.push(new HalfFruit(f.x, f.y, f.emoji, f.type, f.vx, f.vy, f.color, false));
+                    comboCount++;
+                }
+            }
+        }
+
+        if (comboCount > 0 && this.mode === 'CLASSIC') {
+            let points = comboCount;
+            if (comboCount >= 3) {
+                points += (comboCount - 2) * 2; // Combo Bonus
+                let comboHUD = document.getElementById('comboDisplay');
+                comboHUD.innerText = `COMBO x${comboCount}!`;
+                comboHUD.className = "text-5xl font-bold text-center mt-20 transition-opacity text-neon-pink";
+                comboHUD.style.opacity = 1;
+                setTimeout(() => comboHUD.style.opacity = 0, 1000);
+            }
+            if (this.timers.double > 0) points *= 2; // 雙倍計分
+            
+            this.score += points;
+            this.updateHUD();
+        }
+    },
+
+    updateAndDraw(ctx) {
+        let now = Date.now();
+
+        // ==== 處理 PLAYING 狀態邏輯 ====
+        if (this.state === 'PLAYING') {
+            // 更新計時器 (派對模式)
+            if (this.mode === 'PARTY') {
+                if (now - this.lastSecondTime >= 1000) {
+                    this.timeLeft--;
+                    this.lastSecondTime = now;
+                    this.updateHUD();
+                    
+                    if (this.timeLeft <= 0) {
+                        this.endGame();
+                        return; // 遊戲結束
+                    }
+                }
+            }
+
+            // 更新香蕉倒數計時
+            if (this.timers.freeze > 0) this.timers.freeze--;
+            if (this.timers.double > 0) this.timers.double--;
+            if (this.timers.frenzy > 0) this.timers.frenzy--;
+
+            let currentSpawnRate = this.timers.frenzy > 0 ? 300 : this.spawnRate; // 狂熱模式下高速生成
+            
+            if (now - this.lastSpawnTime > currentSpawnRate) {
+                this.spawnFruit();
+                this.lastSpawnTime = now;
+            }
+
+            // 更新與繪製水果
+            for (let i = this.fruits.length - 1; i >= 0; i--) {
+                let f = this.fruits[i];
+                f.update();
+                if (!f.sliced) f.draw(ctx);
+                
+                // 掉落判定
+                if (f.y > this.canvas.height + 100 && !f.sliced) {
+                    // 只有在單人經典模式，漏掉普通水果才會扣命
+                    if (this.mode === 'CLASSIC' && f.type !== 'bomb') {
+                        this.lives--;
+                        this.updateHUD();
+                        if(this.lives <= 0) {
+                            this.endGame();
+                        }
+                    }
+                    this.fruits.splice(i, 1);
+                }
+            }
+
+            // 更新與繪製切半的水果
+            for (let i = this.halfFruits.length - 1; i >= 0; i--) {
+                let hf = this.halfFruits[i];
+                hf.update();
+                hf.draw(ctx);
+                if (hf.y > this.canvas.height + 100) {
+                    this.halfFruits.splice(i, 1);
+                }
+            }
+
+            // 清理切開的水果
+            this.fruits = this.fruits.filter(f => !f.sliced || f.type === 'bomb');
+        }
+
+        // ==== 所有狀態都會更新粒子與刀光 ====
+
+        // 繪製 UI 按鈕 (MENU / GAMEOVER)
+        if (this.uiButtons && this.uiButtons.length > 0) {
+            ctx.save();
+            this.uiButtons.forEach(btn => {
+                // 畫背光
+                ctx.beginPath();
+                ctx.arc(btn.x, btn.y, btn.r, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+                ctx.fill();
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = btn.color;
+                ctx.stroke();
+                
+                // 畫 Emoji
+                let img = SpriteCache[btn.emoji]?.full;
+                if (img) {
+                    ctx.drawImage(img, btn.x - btn.r*0.6, btn.y - btn.r*0.6, btn.r*1.2, btn.r*1.2);
+                }
+
+                // 畫文字說明
+                ctx.font = 'bold 36px Outfit, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.fillStyle = '#fff';
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = btn.color;
+                ctx.fillText(btn.text, btn.x, btn.y + btn.r + 20);
+                ctx.shadowBlur = 0;
+            });
+            ctx.restore();
+        }
+
+        // 更新粒子
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            let p = this.particles[i];
+            p.update();
+            p.draw(ctx);
+            if (p.life <= 0) this.particles.splice(i, 1);
+        }
+        
+        // 衰減刀光軌跡 (最多支援 4 隻手)
+        for(let h=0; h<4; h++) {
+            let pts = this.bladePoints[h];
+            if(!pts) continue;
+            for(let i = pts.length - 1; i >= 0; i--) {
+                pts[i].life -= 0.15; // 軌跡壽命衰減
+                if (pts[i].life <= 0) {
+                    pts.splice(i, 1);
+                }
+            }
+        }
+        
+        // 繪製多邊形刀光軌跡 (Trail Polygon Algorithm)
+        for(let h=0; h<4; h++) {
+            let pts = this.bladePoints[h];
+            if(!pts || pts.length < 2) continue;
+            
+            ctx.beginPath();
+            let leftPoints = [];
+            let rightPoints = [];
+            
+            for (let i = 0; i < pts.length; i++) {
+                let p = pts[i];
+                let width = Math.max(1, p.life * 15); 
+                
+                let dx, dy;
+                if (i < pts.length - 1) {
+                    dx = pts[i+1].x - p.x;
+                    dy = pts[i+1].y - p.y;
+                } else {
+                    dx = p.x - pts[i-1].x;
+                    dy = p.y - pts[i-1].y;
+                }
+                
+                let len = Math.sqrt(dx*dx + dy*dy) || 1;
+                let nx = -dy / len;
+                let ny = dx / len;
+                
+                leftPoints.push({x: p.x + nx * width, y: p.y + ny * width});
+                rightPoints.push({x: p.x - nx * width, y: p.y - ny * width});
+            }
+            
+            ctx.moveTo(leftPoints[0].x, leftPoints[0].y);
+            for (let i = 1; i < leftPoints.length; i++) {
+                ctx.lineTo(leftPoints[i].x, leftPoints[i].y);
+            }
+            
+            let tip = pts[pts.length-1];
+            ctx.lineTo(tip.x, tip.y);
+            
+            for (let i = rightPoints.length - 1; i >= 0; i--) {
+                ctx.lineTo(rightPoints[i].x, rightPoints[i].y);
+            }
+            ctx.closePath();
+            
+            // 白心紅邊刀光
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'; 
+            ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(239, 68, 68, 0.7)';
+            ctx.stroke();
+        }
+    }
+};
+
+// ==========================================
+// 👁️ 視訊與 MediaPipe 體感追蹤
+// ==========================================
+const videoElement = document.getElementsByClassName('input_video')[0];
+const canvasCtx = document.getElementById('gameCanvas').getContext('2d');
+GameEngine.init();
+
+function onResults(results) {
+    try {
+        let canvas = GameEngine.canvas;
+        let ctx = canvasCtx;
+        
+        ctx.save();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 繪製背景視訊 (調低不透明度，並鏡像處理)
+        ctx.globalAlpha = 0.3;
+        if(results.image) {
+            ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+        }
+        ctx.globalAlpha = 1.0;
+
+        // 呼叫遊戲主邏輯繪製 (狀態更新、水果、UI、刀光)
+        GameEngine.updateAndDraw(ctx);
+
+        // 處理手部追蹤與刀光產生
+        if (results.multiHandLandmarks) {
+            results.multiHandLandmarks.forEach((landmarks, index) => {
+                let handIdx = index < 4 ? index : 3; // 最多追蹤 4 隻手
+                
+                // 改為取手掌心座標 (Middle Finger MCP - landmarks[9]) 當作刀光基準點
+                let center = landmarks[9];
+                let wx = center.x * canvas.width;
+                let wy = center.y * canvas.height;
+
+                let pts = GameEngine.bladePoints[handIdx];
+                let prevX = wx, prevY = wy;
+                
+                if(pts.length > 0) {
+                    prevX = pts[pts.length - 1].x;
+                    prevY = pts[pts.length - 1].y;
+                    
+                    // 【防瞬移/軌跡重疊機制】
+                    // 如果手的瞬間移動距離過大 (例如手離開畫面再回來，或是 AI 辨識順序跳動)
+                    // 則直接把這條舊的軌跡清空，從新點開始畫，避免拉出一條貫穿畫面的錯誤刀光
+                    let dist = Math.sqrt(Math.pow(wx - prevX, 2) + Math.pow(wy - prevY, 2));
+                    if (dist > canvas.width * 0.25) {
+                        pts.length = 0; // 清空舊軌跡
+                        prevX = wx;
+                        prevY = wy;
+                    }
+                }
+                
+                // 把最新的掌心位置存入軌跡陣列
+                pts.push({x: wx, y: wy, life: 1.0});
+                
+                // 若有過去的軌跡，用「上一幀到這一幀」的線段來判定切割 (無論是水果還是 UI 按鈕)
+                if(pts.length > 1) {
+                     GameEngine.processSlash(prevX, prevY, wx, wy);
+                }
+            });
+        }
+        ctx.restore();
+    } catch (e) {
+        console.error("Frame Rendering Error: ", e);
+    }
+}
+
+// 初始化 MediaPipe
+const hands = new Hands({locateFile: (file) => {
+  return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+}});
+hands.setOptions({
+  maxNumHands: 4, // 升級支援 4 隻手 (雙人)
+  modelComplexity: 1,
+  minDetectionConfidence: 0.6,
+  minTrackingConfidence: 0.6
+});
+hands.onResults(onResults);
+
+// 初始化相機
+const camera = new Camera(videoElement, {
+  onFrame: async () => {
+    await hands.send({image: videoElement});
+  },
+  width: 1280,
+  height: 720
+});
+
+// 當 MediaPipe 模型載入並綁定完成，顯示「點擊授權」畫面
+hands.initialize().then(() => {
+    document.getElementById('loadingScreen').classList.add('hidden');
+    document.getElementById('startScreen').classList.remove('hidden');
+});
+
+// 使用者點擊按鈕後，才開始索取相機權限與啟動音效
+document.getElementById('btnInit').addEventListener('click', () => {
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+    
+    // 預先啟動一次 YT，解決瀏覽器自動播放限制
+    if (ytPlayer && typeof ytPlayer.playVideo === 'function') {
+        ytPlayer.playVideo();
+        ytPlayer.pauseVideo();
+    }
+    
+    document.getElementById('startScreen').classList.add('hidden');
+    document.getElementById('loadingScreen').classList.remove('hidden'); // 相機暖機中...
+    
+    camera.start().then(() => {
+        GameEngine.setMenuState();
+    }).catch((err) => {
+        console.error("相機存取失敗", err);
+        alert("請允許相機權限以進行體感遊戲。");
+        document.getElementById('startScreen').classList.remove('hidden');
+    });
+});
+
+</script>
+</body>
+</html>
